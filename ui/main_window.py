@@ -2019,10 +2019,22 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error Saving File", str(e))
         return False
 
+    def _print_document(self):
+        """Dokumentet som går till skrivaren: fälten upplösta, som i exporten.
+
+        Ctrl+P och förhandsvisningen skickade förut rådokumentet, så en fotnot
+        skrevs ut som `[not: …]` medan samma bok i PDF fick en riktig not — två
+        sanningar om samma text, samma klass av fel som sidmåtten hade.
+        """
+        doc = self.editor.document
+        if doc is None:
+            return None
+        return self._resolved_for_export(doc)
+
     def file_print(self):
         if self.stack.currentIndex() == 0:
             return
-        doc = self.editor.document
+        doc = self._print_document()
         if doc is None:
             return
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
@@ -2034,7 +2046,7 @@ class MainWindow(QMainWindow):
     def file_print_preview(self):
         if self.stack.currentIndex() == 0:
             return
-        doc = self.editor.document
+        doc = self._print_document()
         if doc is None:
             return
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)

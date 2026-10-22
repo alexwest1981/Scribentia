@@ -2700,6 +2700,11 @@ def main() -> int:
     check("se kapitel 1" in export37, "och hänvisningen blir en hänvisning")
     check("[not:" not in export37 and "[figur:" not in export37 and "[ref:" not in export37,
           "inga markeringar står kvar i den exporterade texten")
+    # Utskriften går samma väg. Ctrl+P och förhandsvisningen skickade förut
+    # rådokumentet, och då skrevs [not: …] ut som text på papperet.
+    utskrift37 = win._print_document()
+    check(utskrift37 is not None and "[not:" not in utskrift37.toPlainText(),
+          "och utskriften löser upp fälten likadant")
 
     print("\n36. Sök och ersätt, och autokorrigering (fas 4.9 och 4.12)")
 

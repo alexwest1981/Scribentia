@@ -1,5 +1,13 @@
 # Scribentia — inventering av layout-, sido- och printfunktioner
 
+> **Rättat efter min egen kontroll (2026-10-22, samma dag):** tre rader i tabellen nedan var sanna
+> när de skrevs och är det inte längre. (1) Utskriften *använder* nu `core/pagination` — kapitel 3
+> och 2 var alltså riktiga fynd och är åtgärdade: keep-with-next och widow/orphan 2/2 gäller både
+> skärm och PDF. (2) `ui/main_window.py` har `_print_document()`: Ctrl+P och förhandsvisningen löser
+> upp fälten som exporten, så `[not: …]` skrivs inte längre ut som text. (3) Radnumren för
+> `core/doc_manager.py` har flyttat (sidlayouten ligger nu på ca rad 270–350). Resten av listan
+> (W1–W10 i `task_plan.md`) står kvar som den var.
+
 Läst read-only på `master`, 2026-10-22. Två kolumner hålls isär med flit: **(a)** finns det en entry/kod för saken, och **(b)** är den *klar* — det vill säga dragen hela vägen in i PDF/utskriftsvägen (`core/doc_manager.py:print_document_to_printer`) **och** syns på skärmen (`ui/paged_paper.py`). Att något står i en modul betyder inte att det ritas.
 
 | # | Funktion | (a) Entry/kod | (b) Klar (print + skärm) | Evidens |
