@@ -112,9 +112,13 @@ def parse_json(text: str):
         body = body.split("\n", 1)[-1] if "\n" in body else body
         body = body.rsplit("```", 1)[0]
     first, last = body.find("{"), body.rfind("}")
-    if first >= 0 and last > first:
-        body = body[first:last + 1]
-    return json.loads(body)
+    if first < 0 or last <= first:
+        # Ett svar utan JSON är nästan alltid slutpunktens eget felmeddelande,
+        # levererat som ett vanligt svar: "Claude Sonnet 4.6 is no longer
+        # available." Ordagrant, för det var det som hände och det gick inte att
+        # läsa sig till ur "the reply could not be read as JSON".
+        raise ValueError(f"the endpoint replied without JSON: {body[:200]!r}")
+    return json.loads(body[first:last + 1])
 
 
 def batches(keys: list, size: int):
@@ -239,7 +243,15 @@ def self_check() -> int:
     assert [len(b) for b in batches(["a", "b", "c"], 2)] == [2, 1]
     assert parse_json('```json\n{"a": "b"}\n```') == {"a": "b"}
     assert parse_json('Visst: {"a": "b"} klart.') == {"a": "b"}
-    print("translate_locales: 12 kontroller gröna")
+    # Slutpunkten kan svara 200 med en mening i stället för JSON (mätt: "Claude
+    # Sonnet 4.6 is no longer available."), och då skall felet citera meningen i
+    # stället för att säga att svaret inte gick att läsa.
+    try:
+        parse_json("Claude Sonnet 4.6 is no longer available. Please switch to Claude Sonnet 5.5.")
+        raise AssertionError("ett svar utan JSON skall kastas")
+    except ValueError as e:
+        assert "no longer available" in str(e)
+    print("translate_locales: 13 kontroller gröna")
     return 0
 
 
