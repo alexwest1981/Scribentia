@@ -334,8 +334,18 @@ class DocumentManager:
             print_style.scale_for_large_print(doc_clone)
 
         DocumentManager._hyphenate_clone(doc_clone, cfg.get("language", "sv"))
-        doc_clone.setPageSize(QSizeF(content_w, content_h))
-        page_count = max(1, doc_clone.pageCount())
+        # Ett enda flöde, som i Writer: dokumentet läggs i **löpande** höjd vid
+        # textytans bredd, och arken skärs ur samma radbundna paginering som
+        # skärmen ritar (core.pagination). Förut satte Qt en sidhöjd och bröt
+        # själv — då kunde PDF:en bryta på andra rader än arket på skärmen, och
+        # varken rubrikregeln eller änklingsregeln nådde utskriften.
+        from core.pagination import page_offsets
+
+        doc_clone.setPageSize(QSizeF(content_w, -1))
+        doc_clone.setTextWidth(content_w)
+        starts = page_offsets(doc_clone, content_h)
+        page_count = max(1, len(starts))
+
 
         painter = QPainter(printer)
         if not painter.isActive():
@@ -403,15 +413,26 @@ class DocumentManager:
                                      QPointF(page_left + content_w_px, rule_y))
 
                 # --- 2. RITA DOKUMENTSIDA (skalad till layoutenheterna) ---
+                page_start = starts[page_idx] if page_idx < len(starts) else 0.0
+                # Klipp mot aktuell sidas del av dokumentet. Höjden är **avståndet
+                # till nästa ark**, inte alltid hela textytan: brytreglerna gör ett
+                # ark upp till två rader kortare, och med en fast höjd ritades de
+                # raderna om på nästa ark också (mätt: 133 rubriker i en PDF med
+                # 120, alltså 13 dubbletter). Klippet sätts i skrivarpixlar *före*
+                # skalningen — i det skalade, flyttade rummet låg det fel och bet
+                # inte alls.
+                nästa_start = starts[page_idx + 1] if page_idx + 1 < len(starts) else None
+                klipp_höjd = (content_h if nästa_start is None
+                              else min(content_h, max(1.0, nästa_start - page_start)))
+                page_clip = QRectF(0, page_start, content_w, klipp_höjd)
+
                 painter.save()
+                painter.setClipRect(QRectF(page_left, page_top + header_h,
+                                           content_w_px, klipp_höjd * scale))
                 painter.scale(scale, scale)
                 # Flytta origo till sidans innehållsyta, i layoutenheter
                 painter.translate(page_left / scale,
-                                  (page_top + header_h) / scale - page_idx * content_h)
-
-                # Klipp mot aktuell sidas del av dokumentet
-                page_clip = QRectF(0, page_idx * content_h, content_w, content_h)
-                painter.setClipRect(page_clip)
+                                  (page_top + header_h) / scale - page_start)
 
                 ctx = QAbstractTextDocumentLayout.PaintContext()
                 ctx.clip = page_clip
@@ -421,6 +442,19 @@ class DocumentManager:
                 if layout is not None:
                     layout.draw(painter, ctx)
                 painter.restore()
+
+                # Sudda bort det som ritades förbi arkets sista rad. `layout.draw`
+                # klipper på **blocknivå**: ett block som börjar innanför kanten
+                # ritas i sin helhet, även den del som hör till nästa ark (mätt:
+                # 133 rubriker i en PDF med 120 — rubriken stod både sist på ett
+                # ark och överst på nästa). Klippet biter inte på det, men en vit
+                # remsa över överskottet gör det, och den rör inget annat: arkets
+                # sista rad slutar exakt vid nästa arks första rad.
+                if klipp_höjd < content_h - 0.5:
+                    painter.fillRect(
+                        QRectF(page_left, page_top + header_h + klipp_höjd * scale,
+                               content_w_px, (content_h - klipp_höjd) * scale),
+                        QColor(print_style.PAPER_WHITE))
 
                 # --- 3. RITA SIDFOT (oskalat, i skrivarpixlar) ---
                 if has_footer and not skip_page:

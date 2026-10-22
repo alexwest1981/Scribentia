@@ -681,6 +681,57 @@ kontrollistan när faserna är klara.
 - [ ] Tillgänglighetsmetadata kan anges (accessMode, accessibilityFeature, accessibilityHazard). R05
 - [ ] Kanalprofiler, eftersom mått, blöd och metadataregler skiljer sig. R05
 
+## Writer som facit — mätt mot LibreOffice 26.8 (2026-10-22)
+
+Alex: "ta allt Writer gör rätt, som vi ännu gör fel, ta Writer som facit." Två rapporter ligger i
+`docs/research/author-tools/12-writer-paragraf-och-sidflode.md` (Writers regler, källbelagda) och
+`13-layoutinventering.md` (vad vi har i dag, `fil:rad`).
+
+**Mätmetoden är en invariant-svep, inte ett omdöme:** 120 avsnitt (fyllnad → rubrik → sjuradigt
+stycke) renderade i Writer och i vår PDF, och två regler prövas över alla sidor: *rubriken får
+aldrig stå sist på ett ark* och *ett stycke får aldrig lämna en ensam rad över ett brott*.
+
+| | sidor | rubrik sist | ensam rad |
+|---|---|---|---|
+| Writer, rubrikstil (dess regel) | 30 | **0** | 0 |
+| Writer, samma text i brödstil (kontroll) | 26 | **6** | 0 |
+| Scribentia före | 26 | **5** | 0 (men 1 rad vid 228 px, separat svep) |
+| Scribentia efter | 27 | **0** | 0 |
+
+- [x] **Brytreglerna är Writers, inte våra.** `core/pagination.py`: `keep_with_next` för rubriker
+      (Writers rubrikstilar har `fo:keep-with-next="always"`) och widow/orphan 2/2 (Writers
+      standardstil: `ParaOrphans`/`ParaWidows` = 2, mätt över UNO; 120 stycken gav aldrig en
+      ensam rad, minst 2 rader per fragment). Reglerna prövas som invarianter i modulens egenkontroll
+      över 57 ark-höjder — innan de fanns: 5 rubriker sist av 120 avsnitt, och en ensam rad vid
+      228 px textyta.
+- [x] **Ett flöde, inte två.** Utskriften satte en sidhöjd och lät Qt paginera själv, medan skärmen
+      använde `page_offsets` — alltså bröt PDF:en på andra rader än arket (och `KEEP_TOGETHER` nådde
+      aldrig papperet). Nu läggs klonen i löpande höjd och samma paginering skär båda. Mätt: Writer 30
+      sidor / vi 27 för samma innehåll (typsnitt och radavstånd skiljer, reglerna gör det inte).
+- [x] **Ingen dubblett på arken.** `layout.draw` klipper på blocknivå, så ett stycke som börjar
+      innanför kanten ritades i sin helhet även över nästa ark. En vit remsa under arkets sista rad
+      tar bort det synliga överskottet; **kvar:** de överskjutande raderna finns som *osynlig text*
+      i PDF:en (mätt: 3 av 123 rubriker), och en riktig lösning kräver att varje ark ritas ur en
+      klippt kopia av styckena, inte ur hela dokumentet.
+
+**Kvar mot Writer** (numrerade, ur inventeringen — ingen av dem är byggd):
+
+- [ ] **W1 Speglade marginaler.** Udda/jämn sida får samma marginal i dag
+      (`core/publishing.py:163`); Writer växlar inner/ytter per sida. Kräver paginerad målare —
+      sidindex finns nu i utskriftsvägen, så hindret är borta.
+- [ ] **W2 Noter i sidfoten.** Vi har slutnoter (`core/fields.py:135`); Writer sätter fotnoten längst
+      ned på samma sida och krymper textytan.
+- [ ] **W3 Upprepade tabellhuvuden** över sidbrott (`setHeaderRowCount` = 0) och tabeller som delas.
+- [ ] **W4 Tab stops med ledarpunkter** (innehållsförteckningens punktrader) — saknas helt.
+- [ ] **W5 TOC med sidnummer** — vi skriver kapitelnummer som text (`ui/main_window.py:2724`).
+- [ ] **W6 Namngivna stilar** — vi har roller; Writer har ärvbara stycke-/teckenstilar.
+- [ ] **W7 Språk per textparti** (stavning och avstavning följer stycket, inte manuset).
+- [ ] **W8 Utskriftsskalning** ("fit to printable page", procent) — vi har bara large print 1,5×.
+- [ ] **W9 Avstavning på skärmen** och rätt språk i `page_settings` (`cfg.get("language")` faller
+      alltid tillbaka på svenska, `core/doc_manager.py:336`).
+- [ ] **W10 Sidnumrering:** startvärde/omstart per avsnitt, och alternerande läge på skärmen
+      (`ui/paged_paper.py:433` lägger allt till höger).
+
 ## Att åtgärda senare (rapporterat av Alex, ej gjort)
 
 - [ ] **H2 → H1 tappar texten — kunde inte återskapas.** Rapporterat av Alex 2026-10-08: "Om något är
