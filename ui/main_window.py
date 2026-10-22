@@ -1169,6 +1169,14 @@ class MainWindow(QMainWindow):
     def _activate_project(self, project):
         self._deactivate_project()
         self.project = project
+        # Sidmåtten hör till dokumentet, som i Writer, där pappret ägs av
+        # sidstilen: projektet minns sin egen storlek och configen är bara
+        # grunden för ett nytt projekt. Förut låg måtten enbart i configen, så
+        # ett A5-projekt trycktes i den storlek det förra projektet lämnade.
+        eget = project.settings.get("page_settings") or {}
+        if eget:
+            self.page_settings = {**DEFAULT_PAGE_SETTINGS, **eget}
+            self.editor.set_page_settings(self.page_settings)
         # AI:n läser projektets instruktioner ur det projekt som är öppet just nu
         self.ai.set_project_context(
             lambda: (self.project.settings.get("ai_instructions", "") if self.project else ""))
@@ -2124,6 +2132,11 @@ class MainWindow(QMainWindow):
         self.page_settings = {**DEFAULT_PAGE_SETTINGS, **self.page_settings, **new_settings}
         self.config.set("page_settings", self.page_settings)
         self.editor.set_page_settings(self.page_settings)
+        if self.project is not None:
+            # Måtten bor i projektet (det öppna dokumentet), configen behåller
+            # dem som standard för nästa nya projekt.
+            self.project.settings["page_settings"] = dict(self.page_settings)
+            self.project.save()
         self.status_bar.showMessage(_("pagesetup_applied"), 4000)
 
     def hold_together_bad_paragraphs(self) -> int:

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from core.i18n import _
+from core import page_format
 from core.doc_manager import DEFAULT_PAGE_SETTINGS
 
 
@@ -65,11 +66,32 @@ class PageSetupDialog(QDialog):
         row_size = QHBoxLayout()
         lbl_size = QLabel(_("pagesetup_size") + ":")
         self.combo_page_size = QComboBox()
-        self.combo_page_size.addItem("A4 (210 × 297 mm)", "A4")
-        self.combo_page_size.addItem("US Letter (8.5 × 11 in)", "Letter")
+        # Writer listar namngivna papper och låter "Anpassad" ta egna mått; måtten
+        # är de stående, orienteringen läggs på som en flagga (core/page_format).
+        for _namn in page_format.ORDER:
+            _w, _h = page_format.PAPER_MM[_namn]
+            self.combo_page_size.addItem(f"{_namn} ({_w:g} × {_h:g} mm)", _namn)
+        self.combo_page_size.addItem(_("pagesetup_margin_custom"), page_format.CUSTOM)
+        self.combo_page_size.currentIndexChanged.connect(self._on_size_changed)
         row_size.addWidget(lbl_size)
         row_size.addWidget(self.combo_page_size)
         paper_layout.addLayout(row_size)
+
+        # Egna mått. "×" och enheten är språkoberoende, så raden behöver inga
+        # egna i18n-nycklar.
+        row_custom = QHBoxLayout()
+        self.spin_page_w = QDoubleSpinBox()
+        self.spin_page_w.setRange(50.0, 600.0)
+        self.spin_page_w.setDecimals(1)
+        self.spin_page_w.setSuffix(" mm")
+        self.spin_page_h = QDoubleSpinBox()
+        self.spin_page_h.setRange(50.0, 600.0)
+        self.spin_page_h.setDecimals(1)
+        self.spin_page_h.setSuffix(" mm")
+        row_custom.addWidget(self.spin_page_w)
+        row_custom.addWidget(QLabel("×"))
+        row_custom.addWidget(self.spin_page_h)
+        paper_layout.addLayout(row_custom)
 
         row_orient = QHBoxLayout()
         lbl_orient = QLabel(_("pagesetup_orientation") + ":")
@@ -255,10 +277,16 @@ class PageSetupDialog(QDialog):
         root_layout.addLayout(btn_bar)
 
     def _load_from_settings(self):
-        # Pappersformat
-        idx = self.combo_page_size.findData(self.settings.get("page_size", "A4"))
+        # Pappersformat: namnet om inställningarna betyder ett namngivet papper,
+        # annars "Anpassad" med talen i fälten (ett tryckmått som 6x9 heter
+        # ingenting i listan och skall inte låtsas göra det).
+        idx = self.combo_page_size.findData(page_format.preset_name(self.settings))
         if idx >= 0:
             self.combo_page_size.setCurrentIndex(idx)
+        w_mm, h_mm = page_format.page_mm({**self.settings, "orientation": "portrait"})
+        self.spin_page_w.setValue(w_mm)
+        self.spin_page_h.setValue(h_mm)
+        self._on_size_changed()
 
         idx_o = self.combo_orient.findData(self.settings.get("orientation", "portrait"))
         if idx_o >= 0:
@@ -287,6 +315,22 @@ class PageSetupDialog(QDialog):
 
         self._on_numbers_toggled(self.chk_enable_numbers.isChecked())
 
+    def _on_size_changed(self, *_args) -> None:
+        """Egna mått går bara att skriva när "Anpassad" är valt.
+
+        Ett namnval fyller fälten med papprets stående mått, så att siffrorna
+        alltid visar den storlek som gäller (och orienteringen syns i sin egen
+        ruta, som i Writer).
+        """
+        eget = self.combo_page_size.currentData() == page_format.CUSTOM
+        self.spin_page_w.setEnabled(eget)
+        self.spin_page_h.setEnabled(eget)
+        if not eget:
+            namn = self.combo_page_size.currentData()
+            w_mm, h_mm = page_format.PAPER_MM.get(namn, page_format.PAPER_MM[page_format.DEFAULT])
+            self.spin_page_w.setValue(w_mm)
+            self.spin_page_h.setValue(h_mm)
+
     def _on_margin_preset_changed(self):
         val = self.combo_margin_preset.currentData()
         if val == "normal":
@@ -312,7 +356,7 @@ class PageSetupDialog(QDialog):
 
     def _on_apply(self):
         new_cfg = {
-            "page_size": self.combo_page_size.currentData() or "A4",
+            "page_size": self.combo_page_size.currentData() or page_format.DEFAULT,
             "orientation": self.combo_orient.currentData() or "portrait",
             "margin_top_mm": self.spin_top.value(),
             "margin_bottom_mm": self.spin_bottom.value(),
@@ -327,6 +371,11 @@ class PageSetupDialog(QDialog):
             "clean_print": self.chk_clean_print.isChecked(),
             "grayscale_images": self.chk_grayscale_images.isChecked(),
         }
+        if new_cfg["page_size"] == page_format.CUSTOM:
+            # De egna måtten sparas som tal, precis som Writer sparar pappret i
+            # sidstilen: namnet "Anpassad" säger ingenting om storleken.
+            new_cfg["custom_width_mm"] = round(self.spin_page_w.value(), 1)
+            new_cfg["custom_height_mm"] = round(self.spin_page_h.value(), 1)
         self.settings.update(new_cfg)
         self.settings_applied.emit(self.settings)
         self.accept()

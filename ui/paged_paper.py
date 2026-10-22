@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QFrame, QSizePolicy, QWidget
 
-from core import print_style
+from core import page_format, print_style
 from core.i18n import _
 from core.pagination import page_of_offset, page_offsets
 
@@ -29,12 +29,24 @@ from core.pagination import page_of_offset, page_offsets
 # Ramens inre marginal är papprets marginal, och den texten har att röra sig på
 # är arkets innermått — därför räknas CANVAS_PAGE_PX fram ur dem i stället för
 # att skrivas som ett eget tal någon annanstans.
+#
+# De här talen är A4-basen, inte hela sanningen: arket ritas i den storlek
+# sidinställningarna anger (core.page_format.page_mm), och 750 px = 210 mm är
+# skalan mellan millimeter och pixlar. Marginalerna på skärmen är en
+# visningskonvention och står kvar — utskriftens marginaler kommer ur
+# page_settings, som i Writer (där pappret ägs av sidstilen).
 PAGE_WIDTH_PX = 750
+PX_PER_MM = PAGE_WIDTH_PX / 210.0
 PAGE_MARGIN_X = 52
 PAGE_MARGIN_TOP = 34
 PAGE_MARGIN_BOTTOM = 42
 PAGE_HEIGHT_PX = 1060
 CANVAS_PAGE_PX = PAGE_HEIGHT_PX - PAGE_MARGIN_TOP - PAGE_MARGIN_BOTTOM    # 984
+
+# Två ankare, båda ur A4: bredden 750 px = 210 mm, höjden 1060 px = 297 mm. Ett
+# enda ankare gjorde A4 1061 px högt (297 × 750/210 = 1060,7) och därmed en rad
+# mer per ark än basmåtten lovar.
+PX_PER_MM_Y = PAGE_HEIGHT_PX / 297.0
 
 
 class PagedPaper(QWidget):
@@ -76,8 +88,14 @@ class PagedPaper(QWidget):
         self.pages = [0.0]
         self.active = 0
 
-        self.setFixedWidth(self.px(PAGE_WIDTH_PX))
-        self.setMinimumHeight(self.px(PAGE_HEIGHT_PX))
+        # Arkets mått i baspixlar: A4 tills något annat sägs, sedan det
+        # sidinställningarna anger.
+        self.page_w = PAGE_WIDTH_PX
+        self.page_h = PAGE_HEIGHT_PX
+        self.canvas_h = CANVAS_PAGE_PX
+
+        self.setFixedWidth(self.px(self.page_w))
+        self.setMinimumHeight(self.px(self.page_h))
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         self._timer = QTimer(self)
@@ -103,23 +121,46 @@ class PagedPaper(QWidget):
         """Basmått i arkets skala — den enda vägen från basmått till pixlar."""
         return int(round(float(v) * self._scale))
 
+    def base_width(self) -> int:
+        """Arkets bredd i baspixlar (oskalerad) — det autoläget räknar mot."""
+        return int(self.page_w)
+
+    def base_height(self) -> int:
+        """Arkets höjd i baspixlar (oskalerad)."""
+        return int(self.page_h)
+
+    def _apply_page_size(self) -> None:
+        """Sätter arkets mått ur sidinställningarna.
+
+        Writers modell, mätt: papprets storlek hör till sidan och **pagineringen
+        följer den** — samma text blev 8 sidor på A4 och 12 på A5 — medan texten
+        aldrig skalas om. Därför ändrar en ny storlek arkets bredd och höjd här,
+        och sidorna räknas om av refresh().
+        """
+        w_mm, h_mm = page_format.page_mm(self.page_settings)
+        self.page_w = max(1, int(round(w_mm * PX_PER_MM)))
+        self.page_h = max(1, int(round(h_mm * PX_PER_MM_Y)))
+        self.canvas_h = max(1, self.page_h - PAGE_MARGIN_TOP - PAGE_MARGIN_BOTTOM)
+        self.setFixedWidth(self.px(self.page_w))
+        self.setMinimumHeight(self.px(self.page_h))
+
     def set_scale(self, s: float) -> None:
         """Sätter arkets skala och ritar om. Sidorna räknas om av refresh()."""
         s = max(self.MIN_SCALE, min(self.MAX_SCALE, float(s)))
         if abs(s - self._scale) < 0.001:
             return
         self._scale = s
-        self.setFixedWidth(self.px(PAGE_WIDTH_PX))
-        self.setMinimumHeight(self.px(PAGE_HEIGHT_PX))
+        self.setFixedWidth(self.px(self.page_w))
+        self.setMinimumHeight(self.px(self.page_h))
         self.refresh()
 
     def _slot_px(self) -> float:
-        return float(self.px(PAGE_HEIGHT_PX) + self.GAP_PX)
+        return float(self.px(self.page_h) + self.GAP_PX)
 
     def sheet_rect(self, i: int) -> QRectF:
         """Arket i widgetens koordinater."""
         return QRectF(0.0, self.PAD_TOP_PX + i * self._slot_px(),
-                      float(self.px(PAGE_WIDTH_PX)), float(self.px(PAGE_HEIGHT_PX)))
+                      float(self.px(self.page_w)), float(self.px(self.page_h)))
 
     def content_rect(self, i: int) -> QRectF:
         """Arket innanför marginalerna — där texten bor."""
@@ -147,7 +188,7 @@ class PagedPaper(QWidget):
         doc = self.canvas.document()
         if doc is None:
             return
-        self.pages = page_offsets(doc, float(self.px(CANVAS_PAGE_PX)))
+        self.pages = page_offsets(doc, float(self.px(self.canvas_h)))
         self.setFixedHeight(self.total_height())
 
         sida = min(max(0, self.page_of_doc_y(self._cursor_doc_y())), len(self.pages) - 1)
@@ -167,12 +208,12 @@ class PagedPaper(QWidget):
         """Hur mycket text arket rymmer. Radbunden paginering gör att ett ark
         ofta är några pixlar lägre: raden som inte fick plats hör till nästa."""
         if i + 1 < len(self.pages):
-            return min(float(self.px(CANVAS_PAGE_PX)), self.pages[i + 1] - self.pages[i])
+            return min(float(self.px(self.canvas_h)), self.pages[i + 1] - self.pages[i])
         # Sista arket: så mycket text som finns kvar. Editorn måste vara exakt så
         # hög, annars når skrollfältet inte fram till arkets första rad.
         doc = self.canvas.document()
         kvar = float(doc.size().height()) - self.pages[i] if doc is not None else 1.0
-        return max(1.0, min(float(self.px(CANVAS_PAGE_PX)), kvar))
+        return max(1.0, min(float(self.px(self.canvas_h)), kvar))
 
     def _place_canvas(self) -> None:
         """Lägger editorn i det aktiva arket och sätter dess läge i dokumentet."""
@@ -246,8 +287,15 @@ class PagedPaper(QWidget):
                    - self.scroll_area.viewport().height() / 2)
 
     def set_page_settings(self, settings: dict) -> None:
+        """Nya sidinställningar: arket byter storlek och sidorna räknas om.
+
+        Förut bytte bara sidnumret och marginalmarkeringarna — ett A5-dokument
+        såg ut som ett A4 på skärmen medan PDF:en var A5, alltså två sanningar
+        om samma dokument.
+        """
         self.page_settings = dict(settings or {})
-        self.update()
+        self._apply_page_size()
+        self.refresh()
 
     def apply_theme(self) -> None:
         self.update()

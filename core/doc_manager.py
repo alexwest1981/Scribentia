@@ -21,7 +21,7 @@ try:
 except ImportError:
     markdown = None
 
-from core import richtext, print_style
+from core import page_format, richtext, print_style
 from core.i18n import _
 
 # ```-block i Markdown, med valfritt språk
@@ -267,15 +267,13 @@ class DocumentManager:
         if page_settings:
             cfg.update(page_settings)
 
-        # 1. Konfigurera sidlayout
-        is_landscape = cfg.get("orientation") == "landscape"
-        orient = QPageLayout.Orientation.Landscape if is_landscape else QPageLayout.Orientation.Portrait
-        page_size_id = QPageSize.PageSizeId.Letter if cfg.get("page_size") == "Letter" else QPageSize.PageSizeId.A4
-        
-        # En speglad tryckprofil (gutter inåt) får samma marginal på båda sidor:
-        # annars hamnar innermarginalen på fel sida varannan sida i boken.
+        # 1. Konfigurera sidlayout. Måtten kommer ur page_format.page_mm, som redan
+        #    har lagt på orienteringen — därför Portrait här: en Landscape-flagga
+        #    till skulle rotera arket tillbaka. Förut fanns bara två storlekar här
+        #    (Letter och allt annat = A4), så en 6x9-trim trycktes som A4.
         from core.publishing import mirrored_margins
 
+        w_mm, h_mm = page_format.page_mm(cfg)
         vänster_mm, höger_mm = mirrored_margins(cfg)
         margins = QMarginsF(
             vänster_mm,
@@ -283,7 +281,9 @@ class DocumentManager:
             höger_mm,
             float(cfg.get("margin_bottom_mm", 20.0))
         )
-        page_layout = QPageLayout(QPageSize(page_size_id), orient, margins, QPageLayout.Unit.Millimeter)
+        page_layout = QPageLayout(QPageSize(QSizeF(w_mm, h_mm), QPageSize.Unit.Millimeter),
+                                  QPageLayout.Orientation.Portrait, margins,
+                                  QPageLayout.Unit.Millimeter)
         printer.setPageLayout(page_layout)
 
         # 2. Mått. Dokumentet räknar i layoutenheter (96 dpi) medan skrivaren
@@ -563,6 +563,18 @@ class DocumentManager:
             if docx is None:
                 raise ImportError("python-docx is required to write .docx files.")
             doc = docx.Document()
+            # Sidmåtten in i filen. Utan dem ärver Word-mallen Letter — en 6x9-bok
+            # öppnades som Letter i Word medan PDF:en var 6x9.
+            from docx.shared import Mm
+            from core.publishing import mirrored_margins
+
+            w_mm, h_mm = page_format.page_mm(cfg)
+            left_mm, right_mm = mirrored_margins(cfg)
+            for section in doc.sections:
+                section.page_width, section.page_height = Mm(w_mm), Mm(h_mm)
+                section.top_margin = Mm(float(cfg.get("margin_top_mm", 20.0)))
+                section.bottom_margin = Mm(float(cfg.get("margin_bottom_mm", 20.0)))
+                section.left_margin, section.right_margin = Mm(left_mm), Mm(right_mm)
             if clean:
                 # Word-mallens rubrikstilar är blå. Direkt formatering på
                 # stilen själv gör att rubrikerna blir svarta i hela filen,

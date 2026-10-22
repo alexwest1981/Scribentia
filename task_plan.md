@@ -439,7 +439,20 @@ ord efter att fyllnadslistan stramats. Grinden GRÖNT med 661 kontroller i rökp
       sidlayout (12,7/12,7 med spegling, 6,4/12,7 utan, toppmarginalen orörd). **Kvar:** den *riktiga*
       växlingen mellan udda och jämn sida kräver en paginerad målare (sidindex → inner/ytter) — tills
       någon ska trycka är den symmetriska marginalen aldrig fel, bara frikostig — samt kapitelstart på
-      höger sida och blanka fyllnadssidor. R05.5 (+ 0.2)
+      höger sida och blanka fyllnadssidor. **Och papprets storlek hanteras som i Writer** (mätt där
+      över UNO, LO 26.8): storleken är en *sidans* egenskap — `Width`/`Height` i 1/100 mm plus
+      `IsLandscape` som flagga, aldrig ombytta tal — och den **styr pagineringen** utan att skala
+      texten (samma 400-raders text blev 8 sidor på A4 och 12 på A5), ett omöjligt mått behålls som
+      beställt (60×60 mm med 40 mm marginaler förblev 60×60, textyta −20 mm) och bara pappersfacket
+      är skrivarberoende. Nu finns `core/page_format.py` som enda sanning (A3–A6, B5, Letter, Legal,
+      Tabloid, Anpassad med egna mm); Arkets storlek på skärmen, PDF:en och DOCX:en läser samma
+      funktion. Mätt: A4 595×842 pt / 9 sidor, A5 420×595 / 13 sidor, liggande A4 842×595, 6×9
+      432×648 pt, Letter 612×792; DOCX `<w:pgSz>` 11906×16838 (A4), 8391×11906 (A5), 8640×12960
+      (6×9) — förut skrevs ingen `pgSz` alls och Word ärvde Letter, och utskriftsvägen gjorde allt
+      som inte hette Letter till A4. Måtten bor nu i **projektet** (som en sidstil i dokumentet),
+      configen är bara grunden för ett nytt projekt. **Kvar:** flera sidstilar i samma dokument
+      (porträtt första sida, liggande resten) — det kräver sidstilsbegreppet, inte bara en storlek.
+      R05.5 (+ 0.2)
 - [x] **5.6** Omslagsarket ritas: Arkiv → **Rita omslagsarket…** ger en PDF i kanalens exakta mått
       (baksida + rygg + framsida + blöd), med vikstrecken utmärkta, bokens uppgifter på plats och
       ryggbredden räknad ur sidantal och papper — och med titeln och författaren även på ryggen när

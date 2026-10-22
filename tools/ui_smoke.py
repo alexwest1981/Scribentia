@@ -3117,6 +3117,10 @@ def main() -> int:
     # fönstret med pappret) ändrar graden, och därmed hur många rader som ryms.
     win.editor.zoom_auto = False
     win.editor.set_text_point_size(win.editor.BASE_TEXT_PT)
+    # Papprets storlek också: publiceringssektionen ovan kan ha lämnat en 6x9-profil,
+    # och då bryts texten på en annan bredd och sidbrotten faller någon annanstans.
+    ark53 = dict(win.editor.page_frame.page_settings)
+    win.editor.page_frame.set_page_settings({**ark53, "page_size": "A4", "orientation": "portrait"})
     for _i in range(2):
         app.processEvents()
     doc53 = win.editor.document
@@ -3137,6 +3141,7 @@ def main() -> int:
         check(doc53.isUndoAvailable(), "och ändringen går att ångra")
     finally:
         win.page_settings = sparat53
+        win.editor.page_frame.set_page_settings(ark53)
 
     if _prep53.available():
         import ui.main_window as _mw53
@@ -3694,6 +3699,12 @@ def main() -> int:
     win.editor.zoom_auto = False        # pröva det sparade läget, inte autoläget
     bas60 = win.editor.BASE_TEXT_PT
     win.editor.set_text_point_size(bas60)
+    # Sektionen mäter A4-geometrin (750x1060 px), men en tidigare sektion kan ha
+    # lämnat en publiceringsprofil (6x9) i sidinställningarna — och sedan pappret
+    # följer dem är det inte längre samma ark. Pinna A4, lägg tillbaka sedan.
+    ark_innan60 = dict(win.editor.page_frame.page_settings)
+    win.editor.page_frame.set_page_settings(
+        {**ark_innan60, "page_size": "A4", "orientation": "portrait"})
     for _i in range(4):
         app.processEvents()
     frame60 = win.editor.page_frame
@@ -3733,6 +3744,7 @@ def main() -> int:
     check(win.editor.fit_scale(3840, 2000) <= 1.36,
           f"och en bred fullskärm skenar inte i väg "
           f"({win.editor.fit_scale(3840, 2000):.2f} vid 3840x2000)")
+    # Fitskalan räknas mot arkets egen storlek, och arket är pinnat till A4 här.
     check(win.editor.fit_scale(1400, 1000) <= 1.01,
           f"medan ett vanligt fönster stannar vid verklig storlek "
           f"({win.editor.fit_scale(1400, 1000):.2f} vid 1400x1000)")
@@ -3740,7 +3752,43 @@ def main() -> int:
           f"och ett stort fönster fylls ändå "
           f"({win.editor.fit_scale(3840, 2000):.2f} vid 3840x2000)")
 
+    # Papprets storlek styr arket. Det var skillnaden mot Writer, där pappret ägs
+    # av sidan. Ytan ändras, texten skalas aldrig om: ett A5-ark har mindre textyta
+    # och rymmer därför färre rader per sida (i utskriften mätt som 9 sidor på A4
+    # mot 13 på A5 för samma text).
     win.editor.set_text_point_size(bas60)
+    ark_a460 = (frame60.page_w, frame60.page_h)
+    yta_a460 = frame60.canvas_h
+
+    def settle60() -> None:
+        """Låt duken få sin nya bredd och räkna om sidorna: arket ritar om efter
+        120 ms (REFRESH_MS), så en enda processEvents hinner inte."""
+        for _i in range(4):
+            app.processEvents()
+            time.sleep(0.05)
+        frame60.refresh()
+        app.processEvents()
+
+    frame60.set_page_settings(
+        {**frame60.page_settings, "page_size": "A5", "orientation": "portrait"})
+    settle60()
+    check(frame60.page_w < ark_a460[0] and frame60.page_h < ark_a460[1],
+          f"ett A5 blir ett mindre ark ({ark_a460[0]}x{ark_a460[1]} -> "
+          f"{frame60.page_w}x{frame60.page_h} px)")
+    check(abs(frame60.page_w / frame60.page_h - 148 / 210) < 0.01,
+          f"med A5-förhållande ({frame60.page_w / frame60.page_h:.3f})")
+    check(frame60.canvas_h < yta_a460,
+          f"och mindre textyta per sida ({yta_a460} -> {frame60.canvas_h} px)")
+    check(frame60.pages != [] and frame60.pages[0] == 0.0,
+          f"arkets sidor räknas om från början ({len(frame60.pages)} ark)")
+
+    frame60.set_page_settings(
+        {**frame60.page_settings, "page_size": "A4", "orientation": "portrait"})
+    settle60()
+    check((frame60.page_w, frame60.page_h) == ark_a460,
+          f"och tillbaka till A4-arket igen ({frame60.page_w}x{frame60.page_h} px)")
+
+    win.editor.page_frame.set_page_settings(ark_innan60)
     win.editor.zoom_auto = True
     win.is_modified = False
     for _i in range(2):

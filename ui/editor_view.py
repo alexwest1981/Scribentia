@@ -805,8 +805,13 @@ class EditorView(QWidget):
                 viewport_höjd = källa().height()
         if viewport_bredd <= 0:
             return 1.0
-        bredd_skala = (viewport_bredd - 40) / float(PAGE_WIDTH_PX)
-        höjd_skala = ((viewport_höjd - 60) / float(PAGE_HEIGHT_PX)) if viewport_höjd > 0 else 99.0
+        # Arkets egen storlek, inte A4-konstanten: ett A5-ark får plats mindre
+        # text per rad och skall ändå fylla fönstret lika bra.
+        ram = getattr(self, "page_frame", None)
+        ark_bredd = float(ram.base_width() if ram is not None else PAGE_WIDTH_PX)
+        ark_höjd = float(ram.base_height() if ram is not None else PAGE_HEIGHT_PX)
+        bredd_skala = (viewport_bredd - 40) / ark_bredd
+        höjd_skala = ((viewport_höjd - 60) / ark_höjd) if viewport_höjd > 0 else 99.0
         return max(1.0, min(1.35, bredd_skala, höjd_skala))
 
     def resizeEvent(self, event) -> None:
