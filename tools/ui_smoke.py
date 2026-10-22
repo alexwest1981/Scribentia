@@ -3970,6 +3970,64 @@ def main() -> int:
     check(bool(levde62) and "provfel i händelseloopen 62" in text62b,
           "och ett fel i händelseloopen skrivs och stopper inte appen")
 
+    print("\n63. AI-leverantören går att byta (W11)")
+
+    from core import providers as prov63
+    from ui.settings_dialog import SettingsDialog as Settings63
+
+    # Rutan skall visa den leverantör som adressen hör till, även när
+    # ai_provider-nyckeln saknas (config från före den fanns).
+    c63 = win.config
+    sparat63 = {k: c63.get(k, "") for k in ("ai_provider", "ai_endpoint", "ai_key", "ai_model")}
+    c63.set("ai_provider", "")
+    c63.set("ai_endpoint", "https://api.deepseek.com/v1")
+    c63.set("ai_key", "prov-nyckel")
+    c63.set("ai_model", "deepseek-flash")
+    ruta63 = Settings63(c63, win.theme_mgr, win)
+    check(ruta63.combo_provider.currentData() == "deepseek",
+          f"rutan känner igen leverantören ur adressen ({ruta63.combo_provider.currentData()})")
+    check(ruta63.combo_provider.count() == len(prov63.PROVIDERS),
+          f"och listar alla leverantörer ({ruta63.combo_provider.count()} av {len(prov63.PROVIDERS)})")
+
+    i63 = ruta63.combo_provider.findData("ollama")
+    ruta63.combo_provider.setCurrentIndex(i63)
+    check(ruta63.input_ai_url.text() == "http://localhost:11434/v1",
+          f"ett byte fyller i leverantörens adress ({ruta63.input_ai_url.text()})")
+
+    # Modellistan kommer från leverantören själv, och den får inte kasta bort det
+    # användaren redan skrivit.
+    ruta63.input_ai_model.setCurrentText("llama3.2")
+    ruta63._on_models_ready(["llama3.2", "qwen3:8b", "mistral"])
+    check(ruta63.input_ai_model.count() == 3 and ruta63.input_ai_model.currentText() == "llama3.2",
+          f"modellistan fylls och det valda namnet står kvar "
+          f"({ruta63.input_ai_model.count()} st, {ruta63.input_ai_model.currentText()!r})")
+
+    ruta63._on_models_failed("HTTP 401: invalid api key")
+    check("401" in ruta63.lbl_model_note.text(),
+          f"och ett fel från leverantören syns i rutan ({ruta63.lbl_model_note.text()[:40]!r})")
+
+    # En tom modell skall säga till i stället för att skicka ett tomt anrop.
+    ruta63.input_ai_model.setCurrentText("")
+    ruta63._test_ai_connection()
+    check("fyll" in ruta63.lbl_test_status.text().lower() or "fill" in ruta63.lbl_test_status.text().lower()
+          or "✕" in ruta63.lbl_test_status.text(),
+          f"utan modell säger provet till ({ruta63.lbl_test_status.text()[:40]!r})")
+
+    # Provet godtar inte ett felmeddelande som svar — det var hela poängen.
+    ruta63._on_test_done(False, "Claude Sonnet 4.6 is no longer available.")
+    check(ruta63.lbl_test_status.text().startswith("✕"),
+          "och ett svar som är ett felmeddelande blir inte en grön bock")
+
+    # Spara: leverantören skrivs ner, inte bara adressen.
+    ruta63.input_ai_model.setCurrentText("llama3.2")
+    ruta63._save_and_close()
+    check(c63.get("ai_provider") == "ollama",
+          f"sparandet skriver leverantören ({c63.get('ai_provider')})")
+    check(c63.get("ai_endpoint") == "http://localhost:11434/v1",
+          "och adressen som hör till den")
+    for k, v in sparat63.items():
+        c63.set(k, v)
+
     print("\n" + "=" * 66)
     if failures:
         print(f"RESULTAT: {len(failures)} av {checks} kontroller föll")

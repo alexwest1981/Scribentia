@@ -105,6 +105,7 @@ run "läsbarheten" "$PY" -m core.document_stats
 run "analysen" "$PY" -m core.analysis
 run "statistiken" "$PY" -m core.story_stats
 run "normsidan" "$PY" -m core.normsida
+run "leverantörerna" "$PY" -m core.providers
 run "pappersformaten" "$PY" -m core.page_format
 run "pagineringen" "$PY" -m core.pagination
 run "skrivloggen" "$PY" -m core.writing_log

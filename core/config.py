@@ -72,6 +72,9 @@ DEFAULT_CONFIG = {
     # Neutral standard för den som installerar appen. Ingen privat slutpunkt
     # bakas in — användaren anger sin egen leverantör och nyckel i
     # Inställningar. (En sparad config.json vinner alltid över detta.)
+    # Vilken leverantör adressen hör till (core/providers.py). Tom = härleds ur
+    # adressen, så en config från före den här nyckeln fortsätter att fungera.
+    "ai_provider": "",
     "ai_endpoint": DEFAULT_AI_ENDPOINT,
     "ai_key": "",
     "ai_model": DEFAULT_AI_MODEL,

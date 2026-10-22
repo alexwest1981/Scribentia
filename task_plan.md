@@ -729,6 +729,12 @@ aldrig stå sist på ett ark* och *ett stycke får aldrig lämna en ensam rad ö
 - [ ] **W8 Utskriftsskalning** ("fit to printable page", procent) — vi har bara large print 1,5×.
 - [ ] **W9 Avstavning på skärmen** och rätt språk i `page_settings` (`cfg.get("language")` faller
       alltid tillbaka på svenska, `core/doc_manager.py:336`).
+- [x] **W11 Leverantören går att byta** (Alex 22/10: "så vi inte låser oss någonstans").
+      `core/providers.py` äger listan (12 leverantörer + egen slutpunkt), modellistan hämtas ur
+      leverantörens egen `/models` i stället för att appen gissar namn, och anslutningsprovet underkänner
+      ett svar som *är* ett felmeddelande — förut blev "Claude Sonnet 4.6 is no longer available." en grön
+      bock. Sparat val (`ai_provider`) skrivs ner; en config från före nyckeln visas ändå rätt, eftersom
+      leverantören härleds ur adressen. Mätt: 14 kontroller i modulen, 9 i rökprovet (846 totalt).
 - [ ] **W10 Sidnumrering:** startvärde/omstart per avsnitt, och alternerande läge på skärmen
       (`ui/paged_paper.py:433` lägger allt till höger).
 

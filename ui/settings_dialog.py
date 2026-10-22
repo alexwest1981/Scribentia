@@ -4,13 +4,21 @@ from PyQt6.QtWidgets import (
     QFormLayout, QFileDialog
 )
 import os
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from core.i18n import _, i18n
 from core.vault import VAULT_DEFAULT_DIR
 from core.config import DEFAULT_AI_ENDPOINT
+from core import providers as ai_providers
 from ui.theme_manager import THEMES
 
 class SettingsDialog(QDialog):
+    # Trådarna (modellistan och anslutningsprovet) får aldrig röra widgetar
+    # själva: de svarar med en signal och rutan skriver i GUI-tråden. Förut
+    # skrev arbetstråden direkt i etiketten, vilket Qt inte tillåter.
+    models_ready = pyqtSignal(list)
+    models_failed = pyqtSignal(str)
+    test_done = pyqtSignal(bool, str)
+
     def __init__(self, config_mgr, theme_mgr, parent=None):
         super().__init__(parent)
         self.config = config_mgr
@@ -18,6 +26,9 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle(_("settings_title"))
         self.resize(500, 360)
+        self.models_ready.connect(self._on_models_ready)
+        self.models_failed.connect(self._on_models_failed)
+        self.test_done.connect(self._on_test_done)
         self.init_ui()
         self.apply_theme()
 
@@ -58,26 +69,19 @@ class SettingsDialog(QDialog):
         form_ai = QFormLayout(tab_ai)
 
         self.combo_provider = QComboBox()
-        self.providers = [
-            ("omniroute", "OmniRoute (Local Proxy)", "http://127.0.0.1:20128/v1", "OmniRoute"),
-            ("ollama", "Ollama (100% Free & Offline Local AI)", "http://localhost:11434/v1", "llama3.2"),
-            ("deepseek", "DeepSeek (deepseek-chat / v4)", "https://api.deepseek.com/v1", "deepseek-chat"),
-            ("openai", "OpenAI (GPT-4o / GPT-4o-mini)", "https://api.openai.com/v1", "gpt-4o-mini"),
-            ("openrouter", "OpenRouter (Claude 3.5 Sonnet / Llama)", "https://openrouter.ai/api/v1", "anthropic/claude-3.5-sonnet"),
-            ("nous", "Nous Research (Hermes 3 / 4)", "https://inference-api.nousresearch.com/v1", "hermes-3-70b"),
-            ("gemini", "Google Gemini (Direct OpenAI-API)", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-1.5-flash"),
-            ("lmstudio", "LM Studio / LocalAI (Local server)", "http://localhost:1234/v1", "local-model"),
-            ("custom", "Custom / Self-Hosted Endpoint", "", "")
-        ]
+        # Listan bor i core/providers.py — här fanns en kopia som hade blivit
+        # inaktuell (OpenAI 2024, Gemini 1.5, Claude 3.5 via OpenRouter).
+        self.providers = ai_providers.PROVIDERS
+        for post in self.providers:
+            self.combo_provider.addItem(post["name"], post["id"])
 
         curr_url = self.config.get("ai_endpoint", DEFAULT_AI_ENDPOINT)
-        matched_idx = len(self.providers) - 1 # default custom
-        for i, (pid, pname, purl, pmodel) in enumerate(self.providers):
-            self.combo_provider.addItem(pname, pid)
-            if purl and purl.rstrip("/") == curr_url.rstrip("/"):
-                matched_idx = i
-
-        self.combo_provider.setCurrentIndex(matched_idx)
+        curr_model = self.config.get("ai_model", "")
+        # Sparad leverantör, annars härledd ur adressen: den som satte upp appen
+        # före ai_provider fanns skall se rätt rad förkryssad ändå.
+        valt = self.config.get("ai_provider", "") or ai_providers.detect(curr_url)
+        idx = self.combo_provider.findData(valt)
+        self.combo_provider.setCurrentIndex(idx if idx >= 0 else self.combo_provider.count() - 1)
         self.combo_provider.currentIndexChanged.connect(self._on_provider_preset_changed)
         form_ai.addRow(_("settings_ai_provider"), self.combo_provider)
 
@@ -89,8 +93,27 @@ class SettingsDialog(QDialog):
         self.input_ai_key.setPlaceholderText("sk-... (leave empty if not required, e.g. Ollama)")
         form_ai.addRow(_("settings_ai_key"), self.input_ai_key)
 
-        self.input_ai_model = QLineEdit(self.config.get("ai_model", "OmniRoute"))
+        # Modellen är en rullista man får skriva i: namnen ändras hos
+        # leverantörerna, och listan hämtas ur deras egen /models i stället för att
+        # appen gissar (en gissad modell blir ett 404 som ser ut som appfel).
+        self.input_ai_model = QComboBox()
+        self.input_ai_model.setEditable(True)
+        self.input_ai_model.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        if curr_model:
+            self.input_ai_model.addItem(curr_model)
+        self.input_ai_model.setCurrentText(curr_model)
         form_ai.addRow(_("settings_ai_model"), self.input_ai_model)
+
+        model_row = QHBoxLayout()
+        self.btn_models = QPushButton(_("settings_ai_fetch_models"))
+        self.btn_models.setToolTip(_("settings_ai_fetch_models_tip"))
+        self.btn_models.clicked.connect(self._fetch_models)
+        self.lbl_model_note = QLabel("")
+        self.lbl_model_note.setWordWrap(True)
+        self.lbl_model_note.setStyleSheet("font-size: 11px;")
+        model_row.addWidget(self.btn_models)
+        model_row.addWidget(self.lbl_model_note, 1)
+        form_ai.addRow("", model_row)
 
         # Test connection button & status label
         test_row = QHBoxLayout()
@@ -162,50 +185,103 @@ class SettingsDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _on_provider_preset_changed(self, idx):
-        if 0 <= idx < len(self.providers):
-            pid, pname, purl, pmodel = self.providers[idx]
-            if purl:
-                self.input_ai_url.setText(purl)
-            if pmodel:
-                self.input_ai_model.setText(pmodel)
+        if not (0 <= idx < len(self.providers)):
+            return
+        post = self.providers[idx]
+        if post["base_url"]:
+            self.input_ai_url.setText(post["base_url"])
+        # Modellistan hör till den gamla adressen — töm den, men behåll det
+        # användaren själv skrev.
+        if self.input_ai_model.count() and self.input_ai_model.currentText().startswith("http"):
+            self.input_ai_model.clearEditText()
+        self.lbl_model_note.setText(post.get("note", ""))
+
+    def _fetch_models(self):
+        """Hämtar modellistan ur leverantörens egen /models."""
+        url = self.input_ai_url.text().strip()
+        key = self.input_ai_key.text().strip()
+        if not url:
+            self.lbl_model_note.setText(_("settings_ai_test_missing"))
+            return
+        self.btn_models.setEnabled(False)
+        self.lbl_model_note.setText(_("settings_ai_fetching"))
+
+        def worker():
+            try:
+                self.models_ready.emit(ai_providers.fetch_models(url, key))
+            except Exception as e:                      # noqa: BLE001 — felet skall ut
+                self.models_failed.emit(str(e)[:160])
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_models_ready(self, modeller):
+        self.btn_models.setEnabled(True)
+        nu = self.input_ai_model.currentText().strip()
+        self.input_ai_model.clear()
+        self.input_ai_model.addItems(modeller)
+        if nu:
+            self.input_ai_model.setCurrentText(nu)
+        elif modeller:
+            self.input_ai_model.setCurrentText(modeller[0])
+        self.lbl_model_note.setText(_("settings_ai_models_found", n=len(modeller)))
+
+    def _on_models_failed(self, fel):
+        self.btn_models.setEnabled(True)
+        self.lbl_model_note.setText("✕ " + fel)
 
     def _test_ai_connection(self):
-        url = self.input_ai_url.text().strip().rstrip("/") + "/chat/completions"
-        key = self.input_ai_key.text().strip()
-        model = self.input_ai_model.text().strip()
+        """Ett riktigt anrop, och ett svar som *är* ett svar.
 
-        self.lbl_test_status.setText("⏳ Testing connection...")
+        Förut räckte HTTP 200: en leverantör som svarade "Claude Sonnet 4.6 is no
+        longer available." fick en grön bock, och felet syntes först när
+        användaren skrev något i panelen (mätt: det var precis vad som hände).
+        """
+        url = ai_providers.chat_url(self.input_ai_url.text().strip())
+        key = self.input_ai_key.text().strip()
+        model = self.input_ai_model.currentText().strip()
+        if not url or not model:
+            self.lbl_test_status.setText("✕ " + _("settings_ai_test_missing"))
+            self.lbl_test_status.setStyleSheet("color: #dc2626; font-size: 11px;")
+            return
+
+        self.lbl_test_status.setText("⏳ " + _("settings_ai_testing"))
         self.lbl_test_status.setStyleSheet("color: #3b82f6; font-size: 11px;")
         self.btn_test.setEnabled(False)
 
-        import threading, httpx
         def worker():
+            import httpx
             headers = {"Content-Type": "application/json"}
             if key:
                 headers["Authorization"] = f"Bearer {key}"
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": "Respond with the word OK."}],
-                "max_tokens": 10
-            }
+            payload = {"model": model,
+                       "messages": [{"role": "user", "content": "Respond with the word OK."}],
+                       "max_tokens": 16}
             try:
-                with httpx.Client(timeout=8.0) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    if resp.status_code == 200:
-                        msg = _("settings_test_success", model=model)
-                        self.lbl_test_status.setText(f"✓ {msg}")
-                        self.lbl_test_status.setStyleSheet("color: #16a34a; font-size: 11px;")
-                    else:
-                        err_txt = resp.text[:80]
-                        self.lbl_test_status.setText(f"✕ HTTP {resp.status_code}: {err_txt}")
-                        self.lbl_test_status.setStyleSheet("color: #dc2626; font-size: 11px;")
-            except Exception as e:
-                self.lbl_test_status.setText(f"✕ {_('settings_test_failed', error=str(e)[:60])}")
-                self.lbl_test_status.setStyleSheet("color: #dc2626; font-size: 11px;")
-            finally:
-                self.btn_test.setEnabled(True)
+                with httpx.Client(timeout=15.0) as client:
+                    svar = client.post(url, headers=headers, json=payload)
+                if svar.status_code != 200:
+                    self.test_done.emit(False, f"HTTP {svar.status_code}: {svar.text[:120]}")
+                    return
+                data = svar.json()
+                text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                if not text.strip():
+                    self.test_done.emit(False, _("settings_ai_test_empty"))
+                elif ai_providers.is_error_reply(text):
+                    self.test_done.emit(False, text.strip()[:160])
+                else:
+                    self.test_done.emit(True, _("settings_ai_test_success", model=model))
+            except Exception as e:                      # noqa: BLE001
+                self.test_done.emit(False, _("settings_ai_test_fail", error=str(e)[:80]))
 
+        import threading
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_test_done(self, ok: bool, text: str):
+        self.btn_test.setEnabled(True)
+        self.lbl_test_status.setText(("✓ " if ok else "✕ ") + text)
+        self.lbl_test_status.setStyleSheet(
+            f"color: {'#16a34a' if ok else '#dc2626'}; font-size: 11px;")
 
     def _browse_vault(self):
         folder = QFileDialog.getExistingDirectory(
@@ -228,9 +304,10 @@ class SettingsDialog(QDialog):
 
         # Apply config
         self.config.set("autosave", self.chk_autosave.isChecked())
+        self.config.set("ai_provider", self.combo_provider.currentData() or "custom")
         self.config.set("ai_endpoint", self.input_ai_url.text().strip())
         self.config.set("ai_key", self.input_ai_key.text().strip())
-        self.config.set("ai_model", self.input_ai_model.text().strip())
+        self.config.set("ai_model", self.input_ai_model.currentText().strip())
         self.config.set("dictation_lang", self.combo_dict_lang.currentData())
         self.config.set("dictation_auto_punctuate", self.chk_punct.isChecked())
         self.config.set("vault_root", self.input_vault_root.text().strip() or VAULT_DEFAULT_DIR)
