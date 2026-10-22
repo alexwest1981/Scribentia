@@ -110,6 +110,9 @@ def main() -> int:
     with open(os.environ["SCRIBENTIA_CONFIG_PATH"], "w", encoding="utf-8") as handle:
         handle.write('{"language": "%s", "theme": "oma"}' % args.lang)
 
+    # Aldrig fönster på Alex skrivbord: skalet ärver hans QT_QPA_PLATFORM.
+    if not os.environ.get("SCRIBENTIA_SHOW_WINDOWS"):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication(sys.argv[:1])

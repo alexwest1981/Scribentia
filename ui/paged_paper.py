@@ -409,7 +409,9 @@ class PagedPaper(QWidget):
         """Sidnumret i arkets fot, där det finns tom plats."""
         if not self.page_settings.get("page_numbering", True):
             return
-        sida = i + 1
+        # Numreringen behöver inte börja på 1: försättsblad och inledning räknas
+        # ofta inte med, och då är sidan 1 i boken ark 9 (W10).
+        sida = int(self.page_settings.get("page_number_start", 1) or 1) + i
         if bool(self.page_settings.get("skip_first_page", False)) and i == 0:
             return
 
@@ -428,9 +430,15 @@ class PagedPaper(QWidget):
         font = QFont("sans-serif", 9)
         painter.setFont(font)
         bredd = QFontMetricsF(font).horizontalAdvance(text)
-        if "left" in pos:
+        # "bottom-alternating" lägger udda sidor till höger och jämna till
+        # vänster, som i en bok — förut hamnade varje sida till höger, vilket
+        # gjorde att vänstersidorna i förhandsvisningen inte såg ut som i tryck.
+        vänster = "left" in pos
+        if pos.endswith("alternating"):
+            vänster = (sida % 2 == 0)
+        if vänster:
             x = ark.x() + PAGE_MARGIN_X
-        elif "right" in pos or pos.endswith("alternating"):
+        elif "right" in pos:
             x = ark.right() - PAGE_MARGIN_X - bredd
         else:
             x = ark.center().x() - bredd / 2.0

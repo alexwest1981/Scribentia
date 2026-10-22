@@ -13,7 +13,7 @@ Konfigurerar:
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QCheckBox, QGroupBox, QDoubleSpinBox, QLineEdit, QPushButton,
-    QTabWidget, QWidget, QRadioButton, QButtonGroup
+    QTabWidget, QWidget, QRadioButton, QButtonGroup, QSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from core.i18n import _
@@ -161,6 +161,28 @@ class PageSetupDialog(QDialog):
         row_m2.addWidget(self.spin_right)
         margin_layout.addLayout(row_m2)
 
+        # Speglade marginaler (W1) och utskriftsskalning (W8) hör hemma här: båda
+        # ändrar hur arket möter texten, inte hur texten ser ut.
+        row_m3 = QHBoxLayout()
+        self.chk_mirror = QCheckBox(_("pagesetup_mirror"))
+        self.chk_mirror.setToolTip(_("pagesetup_mirror_tip"))
+        row_m3.addWidget(self.chk_mirror)
+        row_m3.addStretch()
+        margin_layout.addLayout(row_m3)
+
+        row_m4 = QHBoxLayout()
+        lbl_scale = QLabel(_("pagesetup_print_scale") + ":")
+        self.spin_print_scale = QSpinBox()
+        self.spin_print_scale.setRange(50, 200)
+        self.spin_print_scale.setSingleStep(5)
+        self.spin_print_scale.setValue(100)
+        self.spin_print_scale.setSuffix(" %")
+        self.spin_print_scale.setToolTip(_("pagesetup_print_scale_tip"))
+        row_m4.addWidget(lbl_scale)
+        row_m4.addWidget(self.spin_print_scale)
+        row_m4.addStretch()
+        margin_layout.addLayout(row_m4)
+
         layout_page.addWidget(grp_margins)
         layout_page.addStretch()
         tabs.addTab(tab_page, "📄 " + _("pagesetup_tab_page"))
@@ -206,6 +228,17 @@ class PageSetupDialog(QDialog):
         row_fmt.addWidget(lbl_fmt)
         row_fmt.addWidget(self.combo_num_fmt)
         num_layout.addLayout(row_fmt)
+
+        row_start = QHBoxLayout()
+        lbl_start = QLabel(_("pagesetup_page_start") + ":")
+        self.spin_start = QSpinBox()
+        self.spin_start.setRange(1, 9999)
+        self.spin_start.setValue(1)
+        self.spin_start.setToolTip(_("pagesetup_page_start_tip"))
+        row_start.addWidget(lbl_start)
+        row_start.addWidget(self.spin_start)
+        row_start.addStretch()
+        num_layout.addLayout(row_start)
 
         self.chk_skip_first = QCheckBox(_("pagesetup_skip_first_page"))
         self.chk_skip_first.setChecked(False)
@@ -296,6 +329,9 @@ class PageSetupDialog(QDialog):
         self.spin_bottom.setValue(float(self.settings.get("margin_bottom_mm", 20.0)))
         self.spin_left.setValue(float(self.settings.get("margin_left_mm", 20.0)))
         self.spin_right.setValue(float(self.settings.get("margin_right_mm", 20.0)))
+        self.chk_mirror.setChecked(bool(self.settings.get("mirror_margins", False)))
+        self.spin_print_scale.setValue(int(round(float(self.settings.get("print_scale", 1.0) or 1.0) * 100)))
+        self.spin_start.setValue(int(self.settings.get("page_number_start", 1) or 1))
 
         self.chk_enable_numbers.setChecked(bool(self.settings.get("page_numbering", True)))
 
@@ -353,6 +389,7 @@ class PageSetupDialog(QDialog):
         self.combo_num_pos.setEnabled(enabled)
         self.combo_num_fmt.setEnabled(enabled)
         self.chk_skip_first.setEnabled(enabled)
+        self.spin_start.setEnabled(enabled)
 
     def _on_apply(self):
         new_cfg = {
@@ -366,6 +403,11 @@ class PageSetupDialog(QDialog):
             "page_number_pos": self.combo_num_pos.currentData() or "bottom-center",
             "page_number_format": self.combo_num_fmt.currentData() or "page_of_total",
             "skip_first_page": self.chk_skip_first.isChecked(),
+            # W1 och W8: speglingen växlar inner/ytter per sida, skalningen drar
+            # ihop texten men lämnar arket och marginalerna som de är.
+            "mirror_margins": self.chk_mirror.isChecked(),
+            "print_scale": round(self.spin_print_scale.value() / 100.0, 2),
+            "page_number_start": self.spin_start.value(),
             "header_text": self.input_header_text.text().strip(),
             "footer_text": self.input_footer_text.text().strip(),
             "clean_print": self.chk_clean_print.isChecked(),

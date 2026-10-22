@@ -1015,6 +1015,8 @@ class MainWindow(QMainWindow):
     def _set_focus_mode(self, on: bool, window: bool = True):
         """Sätter läget och synligheten. `window=False` när Qt redan bytt läge."""
         self._focus_mode = on
+        self._focus_was_fullscreen = False
+        self._focus_token = getattr(self, "_focus_token", 0) + 1
         if window:
             if on:
                 self.showFullScreen()
@@ -1034,9 +1036,32 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event):  # noqa: N802 — Qt:s eget namn
         """Lämnas fullskärmen på annat sätt än med F11 skall menyn tillbaka."""
         super().changeEvent(event)
-        if (event.type() == QEvent.Type.WindowStateChange
-                and getattr(self, "_focus_mode", False)
-                and not self.isFullScreen()):
+        if event.type() != QEvent.Type.WindowStateChange:
+            return
+        if self.isFullScreen():
+            self._focus_was_fullscreen = getattr(self, "_focus_mode", False)
+            return
+        # showFullScreen() är asynkron: fönstret rapporterar ett tillståndsbyte
+        # *innan* det är i fullskärm. Förut släpptes läget på det bytet, alltså
+        # stängde F11 sig självt direkt — sporadiskt, beroende på hur snabbt
+        # kompositören svarade (mätt: samma prov föll och gick om vart annat).
+        # Läget får bara släppas när fönstret har *varit* i fullskärm.
+        if (getattr(self, "_focus_mode", False)
+                and getattr(self, "_focus_was_fullscreen", False)):
+            biljett = getattr(self, "_focus_token", 0)
+            # Tillståndsbytena kommer i klump, och ett mellanläge kan se ut som
+            # "inte fullskärm" fast nästa byte är det. Fråga en gång till när kön
+            # är tömd i stället för att släppa läget på första bästa byte.
+            # Biljetten gör att ett svar som hör till ett *tidigare* läge inte får
+            # släppa ett läge som nyss satts på (mätt: den kunde komma efter nästa
+            # F11 och stängde då av ett läge användaren just bad om).
+            QTimer.singleShot(50, lambda: self._leave_focus_if_left(biljett))
+
+    def _leave_focus_if_left(self, biljett=None):
+        """Släpper fokusläget om fönstret verkligen inte är i fullskärm längre."""
+        if biljett is not None and biljett != getattr(self, "_focus_token", 0):
+            return
+        if getattr(self, "_focus_mode", False) and not self.isFullScreen():
             self._set_focus_mode(False, window=False)
 
     def _toggle_dictation(self):
@@ -2124,8 +2149,8 @@ class MainWindow(QMainWindow):
         dlg.settings_applied.connect(self._on_page_settings_applied)
         dlg.settings_applied.connect(
             lambda ny: self.status_bar.showMessage(
-                _("publish_applied", gutter=f"{ny.get('margin_right_mm', 0):g}".replace(".", ","),
-                  outer=f"{ny.get('margin_left_mm', 0):g}".replace(".", ",")), 8000))
+                _("publish_applied", gutter=f"{ny.get('margin_left_mm', 0):g}".replace(".", ","),
+                  outer=f"{ny.get('margin_right_mm', 0):g}".replace(".", ",")), 8000))
         dlg.exec()
 
     def open_page_setup_dialog(self):
@@ -2722,6 +2747,55 @@ class MainWindow(QMainWindow):
             block = block.next()
         return rubriker, number_headings(nivaer)
 
+    def toc_lines(self) -> list:
+        """Innehållsförteckningens rader: rubrik, ledarpunkter och sidnummer (W5).
+
+        Sidnumret är det tal som står i sidfoten: arkets nummer ur samma
+        paginering som skärmen ritar (core.pagination) plus ``page_number_start``.
+        Writer räknar om numren när listan uppdateras; det här är samma avtal —
+        tryck en gång till och numren stämmer med den text som finns nu.
+
+        Ledarpunkterna är text, inte en tab-stop: Qt ritar inga leader dots, och en
+        tabb som inte syns är sämre än punkter som gör det.
+        """
+        from PyQt6.QtGui import QFontMetricsF
+
+        # Arken ägs av pappersramen (PagedPaper), inte av canvasen.
+        ram = getattr(self.editor, "page_frame", None)
+        doc = self.active_canvas.document() if self.active_canvas is not None else None
+        if doc is None or ram is None:
+            return []
+        if not getattr(ram, "pages", None):
+            # Arken räknas om strax efter en ändring (120 ms); listan behöver dem
+            # nu, så den räknar själv i stället för att ge tomma sidtal.
+            ram.refresh()
+        if not getattr(ram, "pages", None):
+            return []
+        canvas = ram
+        start = int(self.page_settings.get("page_number_start", 1) or 1)
+        antal = max(1, len(canvas.pages))
+        mått = QFontMetricsF(self.active_canvas.font())
+        bredd = float(self.active_canvas.viewport().width()) - 8.0
+        punkter = mått.horizontalAdvance(" .") or 4.0
+
+        rader, räknare = [], 0
+        block = doc.begin()
+        while block.isValid():
+            if block.blockFormat().headingLevel() and block.text().strip():
+                räknare += 1
+                titel = f"{räknare}. {block.text().strip()}"
+                ark = canvas.page_of_doc_y(doc.documentLayout().blockBoundingRect(block).y())
+                sida = start + ark
+                tal = f"— {sida} —" if str(self.page_settings.get("page_number_format", "")) == "hyphen" else str(sida)
+                kvar = bredd - mått.horizontalAdvance(titel) - mått.horizontalAdvance(tal)
+                # Minst två punkter, så raden aldrig ser ut som en rubrik utan sidtal.
+                n = max(2, int(kvar / punkter))
+                rader.append(f"{titel} {' .' * n} {tal}".rstrip())
+                if ark >= antal:                  # rubriken ligger utanför sidorna
+                    rader[-1] = titel
+            block = block.next()
+        return rader
+
     def insert_toc(self) -> bool:
         """Infogar eller uppdaterar innehållsförteckningen (R02.7).
 
@@ -2729,11 +2803,15 @@ class MainWindow(QMainWindow):
         andra markeringar: skriver man om ett kapitel trycker man en gång till
         och listan är uppdaterad, i stället för att redigera den för hand.
         """
-        rubriker, nummer = self.headings_and_numbers()
-        if not rubriker:
-            self.status_bar.showMessage(_("toc_none"), 5000)
-            return False
-        rader = "\n".join(f"{n}. {r}" for n, r in zip(nummer, rubriker))
+        # Rubrikerna räknas ut med sina sidnummer; saknas ark (dokumentet syns
+        # inte i ett ark-läge) faller vi tillbaka på listan utan nummer.
+        rader = "\n".join(self.toc_lines())
+        if not rader:
+            rubriker, nummer = self.headings_and_numbers()
+            if not rubriker:
+                self.status_bar.showMessage(_("toc_none"), 5000)
+                return False
+            rader = "\n".join(f"{n}. {r}" for n, r in zip(nummer, rubriker))
         document = self.active_canvas.document()
         cursor = document.find(_TOC_OPEN)
         if not cursor.isNull():

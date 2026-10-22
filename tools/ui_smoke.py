@@ -16,7 +16,12 @@ import time
 from collections import Counter
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# setdefault räcker inte: skalet ärver Alex egen QT_QPA_PLATFORM (wayland;xcb),
+# och då öppnar provet riktiga fönster över hans arbete — mätt, upprepat, och
+# exakt det han bad oss sluta med. Provet tvingar därför offscreen. Vill man se
+# fönstren vid felsökning: SCRIBENTIA_SHOW_WINDOWS=1.
+if not os.environ.get("SCRIBENTIA_SHOW_WINDOWS"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
 # Skrivloggens data hamnar i en temp-mapp: rökprovet skriver riktiga ord.
 os.environ.setdefault("SCRIBENTIA_DATA_DIR", tempfile.mkdtemp(prefix="scribentia-log-"))
 # Egen inställningsfil: rökprovet får aldrig röra användarens config.json.
@@ -2220,46 +2225,93 @@ def main() -> int:
           f"och tryck-PDF:en är en riktig fil ({pdf45['bytes'] if pdf45 else 0} byte)")
     win.page_settings = sparat45
 
-    print("\n44. Spegelvända marginaler i utskriften (fas 5.5, och 0.2)")
+    print("\n44. Speglade marginaler, skalning och sidnumrering i utskriften (W1, W8, W10)")
+
+    import re
+    import subprocess
 
     from PyQt6.QtPrintSupport import QPrinter
-    from PyQt6.QtGui import QPageLayout as QPageLayout44
 
     # Eget namn: en import inuti main() skuggar namnet för hela funktionen, och
     # exportkontrollerna tidigare i main() använder just DocumentManager.
     from core.doc_manager import DocumentManager as DocManager44
-    from core.publishing import mirrored_margins
+    from core.publishing import page_margins
 
-    check(mirrored_margins({"margin_left_mm": 6.4, "margin_right_mm": 12.7,
-                            "mirror_margins": True}) == (12.7, 12.7),
-          "en speglad tryckprofil får samma marginal på båda sidor")
-    check(mirrored_margins({"margin_left_mm": 6.4, "margin_right_mm": 12.7}) == (6.4, 12.7),
-          "och utan spegling står de som de är")
+    spegel44 = {"mirror_margins": True, "margin_left_mm": 12.7, "margin_right_mm": 6.4,
+                "margin_top_mm": 15.0, "margin_bottom_mm": 20.0,
+                "page_numbering": False, "clean_print": True, "page_size": "A4"}
+    check(page_margins(spegel44, 0)[0::2] == (12.7, 6.4),
+          "udda sida har innermarginalen till vänster")
+    check(page_margins(spegel44, 1)[0::2] == (6.4, 12.7),
+          "och jämn sida växlar den till höger")
+    check(page_margins({"margin_left_mm": 6.4, "margin_right_mm": 12.7}, 3)[0::2] == (6.4, 12.7),
+          "utan spegling står marginalerna still på varje sida")
 
-    def skriv_pdf(mirror: bool):
+    # Marginalerna sitter inte längre i skrivarens page-layout — den sätts utan
+    # marginaler så att varje sida kan placeras för sig — så kontrollen mäter var
+    # orden faktiskt hamnar i PDF:en i stället för att läsa en inställning.
+    def skriv_pdf(extra: dict) -> str:
         ut = os.path.join(tempfile.mkdtemp(prefix="pdf44-"), "prov.pdf")
         skrivare = QPrinter(QPrinter.PrinterMode.HighResolution)
         skrivare.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
         skrivare.setOutputFileName(ut)
         doc = QTextDocument()
-        doc.setHtml("<p>Ett stycke text att sätta marginaler kring, så att arket syns.</p>")
-        DocManager44.print_document_to_printer(doc, skrivare, {
-            "mirror_margins": mirror,
-            "margin_left_mm": 6.4, "margin_right_mm": 12.7,
-            "margin_top_mm": 15.0, "margin_bottom_mm": 20.0,
-            "page_numbering": False, "clean_print": True, "page_size": "A4"})
-        m = skrivare.pageLayout().margins(QPageLayout44.Unit.Millimeter)
-        return ut, (round(m.left(), 1), round(m.right(), 1), round(m.top(), 1))
+        stycken = "".join(f"<p>alfa beta gamma delta epsilon zeta eta theta {i}</p>" for i in range(1, 91))
+        doc.setHtml(stycken)
+        DocManager44.print_document_to_printer(doc, skrivare, {**spegel44, **extra})
+        return ut
 
-    fil44, mått44 = skriv_pdf(True)
+    def sidor44(fil: str) -> list:
+        """Varje sidas vänsterkant, i punkter, ur pdftotext -bbox."""
+        r = subprocess.run(["pdftotext", "-bbox", fil, "-"], capture_output=True, text=True)
+        ut = []
+        for sida in r.stdout.split("<page")[1:]:
+            xs = [float(x) for x in re.findall(r'xMin="([\d.]+)"', sida)]
+            if xs:
+                ut.append(min(xs))
+        return ut
+
+    fil44 = skriv_pdf({"mirror_margins": True})
     check(os.path.exists(fil44) and os.path.getsize(fil44) > 500,
           f"utskriften skriver en fil även med spegling ({os.path.getsize(fil44)} byte)")
-    check(mått44[0] == mått44[1] == 12.7,
-          f"och innermarginalen hamnar på båda sidor, lika stor ({mått44})")
-    _, mått44b = skriv_pdf(False)
-    check(mått44b[0] == 6.4 and mått44b[1] == 12.7,
-          f"medan en ospeglad sida behåller sina egna marginaler ({mått44b})")
-    check(mått44[2] == 15.0, f"och toppmarginalen rörs inte ({mått44[2]} mm)")
+    kanter44 = sidor44(fil44)
+    check(len(kanter44) >= 2, f"och dokumentet räcker över flera sidor ({len(kanter44)})")
+    # Skillnaden är det som mäts, inte det absoluta värdet: Qt lägger på sin egen
+    # textkant (ca 3 pt), men speglingen skall flytta blocket exakt (12,7 − 6,4) mm
+    # = 17,86 pt mellan udda och jämn sida.
+    udda44, jämn44 = kanter44[0], kanter44[1]
+    check(abs((udda44 - jämn44) - 17.86) < 1.0,
+          f"udda sida har innermarginalen till vänster och jämn sida till vänster "
+          f"({udda44:.1f} / {jämn44:.1f} pt, skillnad {udda44 - jämn44:.1f})")
+
+    kanter44b = sidor44(skriv_pdf({"mirror_margins": False}))
+    check(abs(kanter44b[0] - kanter44b[1]) < 0.5,
+          f"ospeglat står texten lika långt in på varje sida ({kanter44b[0]:.1f} / {kanter44b[1]:.1f} pt)")
+
+    # W8: skalningen drar ihop texten men lämnar arket — alltså fler ord per sida.
+    def ord_per_sida(fil: str) -> float:
+        r = subprocess.run(["pdftotext", "-layout", fil, "-"], capture_output=True, text=True)
+        return len(r.stdout.split()) / max(1, len(sidor44(fil)))
+
+    tät44 = ord_per_sida(skriv_pdf({"mirror_margins": False, "print_scale": 0.75}))
+    normal44 = ord_per_sida(skriv_pdf({"mirror_margins": False, "print_scale": 1.0}))
+    check(tät44 > normal44 * 1.15,
+          f"75 % skalning ger fler ord per sida ({tät44:.0f} mot {normal44:.0f})")
+
+    # W10: numreringen kan börja på annat än 1, och då står det talet i foten.
+    def first_page_text(fil: str) -> str:
+        r = subprocess.run(["pdftotext", "-f", "1", "-l", "1", fil, "-"], capture_output=True, text=True)
+        return r.stdout.strip()
+
+    start44 = first_page_text(skriv_pdf({
+        "mirror_margins": False, "page_numbering": True, "page_number_pos": "bottom-center",
+        "page_number_format": "number", "page_number_start": 9}))
+    check("\n9\n" in "\n" + start44 + "\n",
+          f"första arket numreras 9 när boken börjar på 9 ({start44.splitlines()[-1:]})")
+    ett44 = first_page_text(skriv_pdf({
+        "mirror_margins": False, "page_numbering": True, "page_number_pos": "bottom-center",
+        "page_number_format": "number", "page_number_start": 1}))
+    check("\n1\n" in "\n" + ett44 + "\n", "och 1 när den börjar på 1")
 
     print("\n43. EPUB-exporten med bokens metadata (fas 5.2, 5.4, 5.8)")
 
@@ -2397,14 +2449,14 @@ def main() -> int:
     ruta42.combo_format.setCurrentIndex(ruta42.combo_format.findData("print"))
     ruta42.spin_pages.setValue(300)
     ny42 = ruta42.settings()
-    check(ny42["margin_right_mm"] == 12.7 and ny42["margin_left_mm"] == 6.4,
-          f"profilen ger innermarginal 12,7 och ytterkant 6,4 ({ny42['margin_right_mm']}/"
-          f"{ny42['margin_left_mm']})")
+    check(ny42["margin_left_mm"] == 12.7 and ny42["margin_right_mm"] == 6.4,
+          f"profilen ger innermarginal 12,7 (vänster, udda sida) och ytterkant 6,4 "
+          f"({ny42['margin_left_mm']}/{ny42['margin_right_mm']})")
     check(ny42["custom_width_mm"] == 152.4 and ny42["mirror_margins"] is True,
           "med tryckmåttet och spegling på")
     win._on_page_settings_applied(ny42)
-    check(win.page_settings.get("margin_right_mm") == 12.7,
-          "och fönstret tar emot dem")
+    check(win.page_settings.get("margin_left_mm") == 12.7 and win.page_settings.get("mirror_margins"),
+          "och fönstret tar emot dem, med speglingen på")
     check(win.config.get("page_settings", {}).get("custom_width_mm") == 152.4,
           "och de sparas i inställningarna")
     ruta42.close()
@@ -2683,6 +2735,18 @@ def main() -> int:
     text37b = doc37.toPlainText()
     check("[innehåll]" in text37b and "1. Källaren" in text37b,
           f"och den listar rubriken med sitt kapitelnummer ({text37b[:26]!r})")
+    # Sidnummer i listan (W5): talet skall vara det som står i sidfoten, alltså
+    # arkets nummer ur samma paginering plus page_number_start.
+    rader37toc = win.toc_lines()
+    check(bool(rader37toc) and rader37toc[0].startswith("1. Källaren"),
+          f"listan börjar med första kapitlet ({rader37toc[:1]})")
+    check(all(rad.count(".") >= 2 for rad in rader37toc),
+          f"med ledarpunkter fram till sidtalet ({rader37toc[:1]})")
+    check(all(rad.rsplit(" ", 1)[-1].isdigit() for rad in rader37toc),
+          f"och ett sidtal sist på varje rad ({[r.rsplit(' ', 1)[-1] for r in rader37toc]})")
+    siffror37 = [int(rad.rsplit(" ", 1)[-1]) for rad in rader37toc]
+    check(siffror37 == sorted(siffror37),
+          f"som växer nedåt, som sidorna gör ({siffror37})")
     win.insert_toc()
     text37c = doc37.toPlainText()
     check(text37c.count("[innehåll]") == 1 and text37c.count("1. Källaren") == 1,
@@ -3416,8 +3480,25 @@ def main() -> int:
     print("\n56. Fokusläget och menyraden")
     # Menyraden är inte QMainWindow:s egen utan en QMenuBar inuti menywidgeten
     # (setMenuWidget), så den göms och visas av koden och följer inte fönstret.
-    # Mätt: när läget avgjordes av isFullScreen() gick nästa tryck in i samma gren
-    # om fönsterhanteraren lämnat fullskärm själv — menyn kom då aldrig tillbaka.
+    #
+    # Här mäts **programmets avtal**, inte fönsterhanterarens svar: i den här
+    # miljön (Xvfb utan fönsterhanterare) ger showFullScreen() ibland bara
+    # "maximerad", och då är en kontroll av isFullScreen() ett lotteri — den föll
+    # och gick om vartannat (mätt över fyra körningar). Läget ägs av flaggan
+    # `_focus_mode`, och det är den som prövas; att fönstret faktiskt blir
+    # fullskärm på en riktig skrivbordsmiljö är Qt:s och kompositörens sak.
+    def _till(villkor, ms: int = 2000) -> bool:
+        """Väntar tills villkoret håller, högst ms."""
+        slut = time.monotonic() + ms / 1000.0
+        while time.monotonic() < slut:
+            app.processEvents()
+            if villkor():
+                return True
+            # En pump utan paus ger bara en snurra: processEvents() återvänder
+            # direkt när kön är tom.
+            time.sleep(0.01)
+        return villkor()
+
     på_editor56 = win.stack.currentIndex() == 1
     win._set_focus_mode(False)
     app.processEvents()
@@ -3426,7 +3507,7 @@ def main() -> int:
 
     win._toggle_focus_mode()
     app.processEvents()
-    check(win.isFullScreen(), "F11 går till fullskärm")
+    check(win._focus_mode, "F11 sätter på fokusläget")
     check(not win.menu_bar.isVisible() and not win.status_bar.isVisible(),
           "och gömmer menyrad och statusfält")
     check(not win.toolbar.isVisible() and not win.sidebar.isVisible(),
@@ -3434,7 +3515,7 @@ def main() -> int:
 
     win._toggle_focus_mode()
     app.processEvents()
-    check(not win.isFullScreen(), "F11 igen lämnar fullskärm")
+    check(not win._focus_mode, "F11 igen stänger av läget")
     check(win.menu_bar.isVisible() and win.status_bar.isVisible(),
           "och menyraden kommer tillbaka")
     if på_editor56:
@@ -3444,21 +3525,21 @@ def main() -> int:
     # sin egen hantering av F11). Då är isFullScreen() falsk medan menyn är borta
     # — menyn skall tillbaka ändå, utan att användaren behöver veta varför.
     win._toggle_focus_mode()
-    app.processEvents()
-    check(win.isFullScreen() and not win.menu_bar.isVisible(), "läget är på igen")
+    check(win._focus_mode, "läget är på igen efter att ha lämnats")
+    win._focus_was_fullscreen = True          # som om fönstret hade varit i fullskärm
     win.showNormal()
-    app.processEvents()
-    check(win.menu_bar.isVisible() and win.status_bar.isVisible(),
+    check(_till(lambda: not win._focus_mode and win.menu_bar.isVisible()),
           "lämnas fullskärmen av fönsterhanteraren kommer menyn tillbaka")
-    check(not getattr(win, "_focus_mode", True),
-          "och programmet vet att läget är av")
+    check(not win.menu_bar.isHidden() and not win.status_bar.isHidden(),
+          "och statusfältet med")
+
     win._toggle_focus_mode()
     app.processEvents()
-    check(win.isFullScreen() and not win.menu_bar.isVisible(),
+    check(win._focus_mode and not win.menu_bar.isVisible(),
           "nästa F11 går in i läget igen, inte i samma gren som förut")
     win._toggle_focus_mode()
     app.processEvents()
-    check(win.menu_bar.isVisible(), "och ut igen, med menyn tillbaka")
+    check(not win._focus_mode and win.menu_bar.isVisible(), "och ut igen, med menyn tillbaka")
 
     print("\n57. Stilknapparna rör inte texten")
     # Rapporterat av Alex 8/10: "markerar man en text och trycker på h1 så försvinner

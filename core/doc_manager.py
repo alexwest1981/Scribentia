@@ -262,35 +262,35 @@ class DocumentManager:
 
     @staticmethod
     def print_document_to_printer(text_document: QTextDocument, printer: QPrinter, page_settings: dict | None = None):
-        """Utskrift och PDF-generering med 100% formateringstrogenhet, sidnummer och sidhuvud/sidfot."""
+        """Utskrift och PDF-generering med sidnummer, sidhuvud/sidfot och speglade marginaler."""
         cfg = DEFAULT_PAGE_SETTINGS.copy()
         if page_settings:
             cfg.update(page_settings)
 
-        # 1. Konfigurera sidlayout. Måtten kommer ur page_format.page_mm, som redan
-        #    har lagt på orienteringen — därför Portrait här: en Landscape-flagga
-        #    till skulle rotera arket tillbaka. Förut fanns bara två storlekar här
-        #    (Letter och allt annat = A4), så en 6x9-trim trycktes som A4.
-        from core.publishing import mirrored_margins
+        from core.pagination import page_offsets
+        from core.publishing import page_margins
 
+        # 1. Pappret. Måtten kommer ur page_format.page_mm, som redan har lagt på
+        #    orienteringen — därför Portrait här: en Landscape-flagga till skulle
+        #    rotera tillbaka arket.
         w_mm, h_mm = page_format.page_mm(cfg)
-        vänster_mm, höger_mm = mirrored_margins(cfg)
-        margins = QMarginsF(
-            vänster_mm,
-            float(cfg.get("margin_top_mm", 20.0)),
-            höger_mm,
-            float(cfg.get("margin_bottom_mm", 20.0))
-        )
-        page_layout = QPageLayout(QPageSize(QSizeF(w_mm, h_mm), QPageSize.Unit.Millimeter),
-                                  QPageLayout.Orientation.Portrait, margins,
-                                  QPageLayout.Unit.Millimeter)
-        printer.setPageLayout(page_layout)
+        left0, top_mm, right0, bottom_mm = page_margins(cfg, 0)
+        # Textytan är lika bred på varje sida även när marginalerna växlar mellan
+        # udda och jämn sida — det är bara x-läget som flyttas, som i Writer.
+        text_w_mm = max(20.0, w_mm - left0 - right0)
+
+        # Skrivarens egen marginal läggs inte ovanpå våra: layouten sätts utan
+        # marginaler och varje sida placeras för sig (det är så speglingen kan
+        # flytta textblocket utan att byta pappersstorlek).
+        page_size = QPageSize(QSizeF(w_mm, h_mm), QPageSize.Unit.Millimeter)
+        printer.setPageLayout(QPageLayout(page_size, QPageLayout.Orientation.Portrait,
+                                          QMarginsF(0, 0, 0, 0),
+                                          QPageLayout.Unit.Millimeter))
 
         # 2. Mått. Dokumentet räknar i layoutenheter (96 dpi) medan skrivaren
-        #    räknar i sin egen upplösning. Skalan förmedlar mellan dem: utan
-        #    den sätts sidstorleken i skrivarpixlar, dokumentet tror att hela
-        #    upplagan får plats på en sida och texten ritas några millimeter
-        #    stor i hörnet i stället för över hela arket.
+        #    räknar i sin egen upplösning. Skalan förmedlar mellan dem: utan den
+        #    ritas texten några millimeter stor i hörnet i stället för att fylla
+        #    arket.
         resolution = printer.resolution()
         scale = resolution / LAYOUT_DPI
         dpmm = resolution / 25.4               # millimeter i skrivarpixlar
@@ -298,23 +298,24 @@ class DocumentManager:
         paint_rect = printer.pageLayout().paintRectPixels(resolution)
         full_rect = printer.pageLayout().fullRectPixels(resolution)
 
-        # Reservera utrymme för sidhuvud och sidfot
+        # Reservera utrymme för sidhuvud och sidofot
         has_header = bool(cfg.get("header_text")) or "top" in str(cfg.get("page_number_pos", ""))
         has_footer = bool(cfg.get("footer_text")) or ("bottom" in str(cfg.get("page_number_pos", "bottom-center")) and cfg.get("page_number_pos") != "none")
 
         header_h = (8.0 * dpmm) if has_header else 0.0
         footer_h = (8.0 * dpmm) if has_footer else 0.0
 
-        # Skrivarpixlar: sidhuvud, sidfot och pappersbotten ritas oskalat, så
-        # att 9 pt verkligen blir 9 pt i stället för 9 pt gånger skalan.
-        content_w_px = paint_rect.width()
-        content_h_px = paint_rect.height() - header_h - footer_h
-        page_left = paint_rect.x()
-        page_top = paint_rect.y()
+        # Utskriftsskalning (W8): texten skalas, arket och marginalerna står kvar.
+        # 1.0 = som dokumentet ser ut; 0.8 ger 25 % fler tecken per rad i samma
+        # spalt (mätt som tecken per rad i PDF:en, inte som sidantal).
+        print_scale = max(0.5, min(2.0, float(cfg.get("print_scale", 1.0) or 1.0)))
+        rit_skala = scale * print_scale
 
+        content_w_px = text_w_mm * dpmm
+        content_h_px = paint_rect.height() - header_h - footer_h
         # Layoutenheter: dokumentets egen yta
-        content_w = content_w_px / scale
-        content_h = content_h_px / scale
+        content_w = content_w_px / rit_skala
+        content_h = content_h_px / rit_skala
 
         # 3. Klona dokumentet för layout utan att röra originalet
         doc_clone = text_document.clone()
@@ -336,16 +337,11 @@ class DocumentManager:
         DocumentManager._hyphenate_clone(doc_clone, cfg.get("language", "sv"))
         # Ett enda flöde, som i Writer: dokumentet läggs i **löpande** höjd vid
         # textytans bredd, och arken skärs ur samma radbundna paginering som
-        # skärmen ritar (core.pagination). Förut satte Qt en sidhöjd och bröt
-        # själv — då kunde PDF:en bryta på andra rader än arket på skärmen, och
-        # varken rubrikregeln eller änklingsregeln nådde utskriften.
-        from core.pagination import page_offsets
-
+        # skärmen ritar (core.pagination).
         doc_clone.setPageSize(QSizeF(content_w, -1))
         doc_clone.setTextWidth(content_w)
         starts = page_offsets(doc_clone, content_h)
         page_count = max(1, len(starts))
-
 
         painter = QPainter(printer)
         if not painter.isActive():
@@ -357,16 +353,23 @@ class DocumentManager:
         color_hf = QColor(print_style.PAPER_MUTED)
         color_rule = QColor(print_style.PAPER_RULE)
         full_page = QRectF(0, 0, full_rect.width(), full_rect.height())
+        first_number = int(cfg.get("page_number_start", 1) or 1)
+        page_top = paint_rect.y()
 
         try:
             for page_idx in range(page_count):
                 if page_idx > 0:
                     printer.newPage()
 
+                # Den här sidans vänstermarginal. Speglade marginaler växlar
+                # inner/ytter mellan sidorna (page_margins), så textblocket
+                # flyttas i sidled — papperet är detsamma.
+                page_left = paint_rect.x() + page_margins(cfg, page_idx)[0] * dpmm
+
                 # Vit pappersbotten på varje sida — även om dokumentet är tomt
                 painter.fillRect(full_page, QColor(print_style.PAPER_WHITE))
 
-                page_num = page_idx + 1
+                page_num = first_number + page_idx
                 skip_page = bool(cfg.get("skip_first_page", False)) and (page_idx == 0)
 
                 # Formatera sidnumret
@@ -416,11 +419,8 @@ class DocumentManager:
                 page_start = starts[page_idx] if page_idx < len(starts) else 0.0
                 # Klipp mot aktuell sidas del av dokumentet. Höjden är **avståndet
                 # till nästa ark**, inte alltid hela textytan: brytreglerna gör ett
-                # ark upp till två rader kortare, och med en fast höjd ritades de
-                # raderna om på nästa ark också (mätt: 133 rubriker i en PDF med
-                # 120, alltså 13 dubbletter). Klippet sätts i skrivarpixlar *före*
-                # skalningen — i det skalade, flyttade rummet låg det fel och bet
-                # inte alls.
+                # ark upp till två rader kortare. Klippet sätts i skrivarpixlar
+                # *före* skalningen — i det skalade, flyttade rummet låg det fel.
                 nästa_start = starts[page_idx + 1] if page_idx + 1 < len(starts) else None
                 klipp_höjd = (content_h if nästa_start is None
                               else min(content_h, max(1.0, nästa_start - page_start)))
@@ -428,11 +428,11 @@ class DocumentManager:
 
                 painter.save()
                 painter.setClipRect(QRectF(page_left, page_top + header_h,
-                                           content_w_px, klipp_höjd * scale))
-                painter.scale(scale, scale)
+                                           content_w_px, klipp_höjd * rit_skala))
+                painter.scale(rit_skala, rit_skala)
                 # Flytta origo till sidans innehållsyta, i layoutenheter
-                painter.translate(page_left / scale,
-                                  (page_top + header_h) / scale - page_start)
+                painter.translate(page_left / rit_skala,
+                                  (page_top + header_h) / rit_skala - page_start)
 
                 ctx = QAbstractTextDocumentLayout.PaintContext()
                 ctx.clip = page_clip
@@ -446,14 +446,11 @@ class DocumentManager:
                 # Sudda bort det som ritades förbi arkets sista rad. `layout.draw`
                 # klipper på **blocknivå**: ett block som börjar innanför kanten
                 # ritas i sin helhet, även den del som hör till nästa ark (mätt:
-                # 133 rubriker i en PDF med 120 — rubriken stod både sist på ett
-                # ark och överst på nästa). Klippet biter inte på det, men en vit
-                # remsa över överskottet gör det, och den rör inget annat: arkets
-                # sista rad slutar exakt vid nästa arks första rad.
+                # 133 rubriker i en PDF med 120).
                 if klipp_höjd < content_h - 0.5:
                     painter.fillRect(
-                        QRectF(page_left, page_top + header_h + klipp_höjd * scale,
-                               content_w_px, (content_h - klipp_höjd) * scale),
+                        QRectF(page_left, page_top + header_h + klipp_höjd * rit_skala,
+                               content_w_px, (content_h - klipp_höjd) * rit_skala),
                         QColor(print_style.PAPER_WHITE))
 
                 # --- 3. RITA SIDFOT (oskalat, i skrivarpixlar) ---

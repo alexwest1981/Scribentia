@@ -31,7 +31,10 @@ from pathlib import Path
 
 import numpy as np
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# setdefault räcker inte: skalet ärver Alex egen QT_QPA_PLATFORM, och då öppnar
+# provet riktiga fönster över hans arbete. Tvinga offscreen (se ui_smoke.py).
+if not os.environ.get("SCRIBENTIA_SHOW_WINDOWS"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402

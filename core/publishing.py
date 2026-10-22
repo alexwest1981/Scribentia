@@ -131,8 +131,8 @@ def page_settings_for(trim: str, pages: int, paper: str = "white", bleed: bool =
         "custom_height_mm": trim_mm(trim)[1],
         "margin_top_mm": top_mm,
         "margin_bottom_mm": bottom_mm,
-        "margin_left_mm": ytter,      # ytterkant; speglas i utskriften
-        "margin_right_mm": inner,     # innermarginal (gutter)
+        "margin_left_mm": inner,      # innermarginal (gutter) — udda sidor
+        "margin_right_mm": ytter,     # ytterkant; speglas på jämna sidor
         "mirror_margins": True,
         "page_numbering": True,
         "page_number_pos": "bottom-alternating",
@@ -144,24 +144,32 @@ def page_settings_for(trim: str, pages: int, paper: str = "white", bleed: bool =
     }
 
 
-def mirrored_margins(settings: dict) -> tuple:
-    """Vänster- och högermarginal för utskrift, av en speglad tryckprofil.
+def page_margins(settings: dict, page_index: int = 0) -> tuple:
+    """(vänster, topp, höger, botten) i millimeter för en sida.
 
-    Är spegling på sätts **samma marginal på båda sidor**, lika med den inre
-    (gutter): det är rätt i tryck — innermarginalen blir aldrig för liten, vilket
-    är det fel som syns i en färdig bok — och priset är en något generös
-    ytterkant.
+    Speglade marginaler växlar inner/ytter mellan sidorna: udda sidor är
+    högersidor (sidnummer 1, 3, 5 …) och har innermarginalen — guttern — till
+    vänster; jämna sidor har den till höger. Texten är lika bred på båda, det är
+    bara blocket som flyttas, och det är därför utskriften ritar sida för sida.
 
-    ponytail: riktig växling mellan udda och jämn sida kräver en paginerad
-    målare (sidindex → inner/ytter), inte en konstant margin-box. Det är byggt
-    när någon faktiskt ska trycka: tills dess är den symmetriska marginalen
-    aldrig fel, bara frikostig.
+    Förut sattes samma marginal på båda sidor (max av de två), för att en riktig
+    växling krävde en paginerad målare. Den finns nu: utskriftsvägen känner
+    sidindex, så priset — en onödigt bred yttermarginal — behöver inte betalas.
     """
     vänster = float(settings.get("margin_left_mm", 20.0) or 20.0)
     höger = float(settings.get("margin_right_mm", 20.0) or 20.0)
-    if not settings.get("mirror_margins"):
-        return (vänster, höger)
-    return (max(vänster, höger), max(vänster, höger))
+    if settings.get("mirror_margins") and page_index % 2 == 1:
+        vänster, höger = höger, vänster
+    return (vänster,
+            float(settings.get("margin_top_mm", 20.0) or 20.0),
+            höger,
+            float(settings.get("margin_bottom_mm", 20.0) or 20.0))
+
+
+def mirrored_margins(settings: dict) -> tuple:
+    """(vänster, höger) för en udda sida — kvar för äldre anrop."""
+    vänster, _topp, höger, _botten = page_margins(settings, 0)
+    return (vänster, höger)
 
 
 def warnings(trim: str, pages: int, paper: str = "white", bleed: bool = False,
@@ -227,11 +235,11 @@ def _self_test() -> int:
     # Sidinställningarna: inner blir gutter, ytter blir 6,4 mm
     inst = page_settings_for("6x9", 300)
     check("trimmets mått följer med", (inst["custom_width_mm"], inst["custom_height_mm"]), (152.4, 228.6))
-    check("innermarginalen är gutter", inst["margin_right_mm"], 12.7)
-    check("ytterkanten är KDP:s minimum", inst["margin_left_mm"], 6.4)
+    check("innermarginalen är gutter", inst["margin_left_mm"], 12.7)
+    check("ytterkanten är KDP:s minimum", inst["margin_right_mm"], 6.4)
     check("och speglingen är på", inst["mirror_margins"], True)
     check("blöd läggs på ytterkanten",
-          page_settings_for("6x9", 300, bleed=True)["margin_left_mm"], 9.6)
+          page_settings_for("6x9", 300, bleed=True)["margin_right_mm"], 9.6)
     check("okänt trim ger inga inställningar", page_settings_for("b5", 300), None)
 
     # Varningarna
@@ -249,14 +257,21 @@ def _self_test() -> int:
           [n for n, k in CHANNELS.items() if k["formula"]], ["kdp"])
     check("alla bär en källa", all(k["source"] in SOURCES for k in CHANNELS.values()), True)
 
-    # Spegelvändningen: samma marginal på båda sidor, lika med den inre
+    # Spegelvändningen: inner/ytter växlar mellan udda och jämn sida, och textytan
+    # är lika bred på båda (det är bara blocket som flyttas).
+    spegel = {"margin_left_mm": 12.7, "margin_right_mm": 6.4, "mirror_margins": True,
+              "margin_top_mm": 15.0, "margin_bottom_mm": 20.0}
+    check("udda sida har innermarginalen till vänster",
+          page_margins(spegel, 0)[0::2], (12.7, 6.4))
+    check("jämn sida växlar den till höger",
+          page_margins(spegel, 1)[0::2], (6.4, 12.7))
+    check("och textytan är lika bred på båda",
+          round(page_margins(spegel, 0)[0] + page_margins(spegel, 0)[2], 2)
+          == round(page_margins(spegel, 1)[0] + page_margins(spegel, 1)[2], 2), True)
     check("utan spegling står marginalerna som de är",
           mirrored_margins({"margin_left_mm": 6.4, "margin_right_mm": 12.7}), (6.4, 12.7))
-    check("med spegling blir båda den inre",
-          mirrored_margins({"margin_left_mm": 6.4, "margin_right_mm": 12.7,
-                            "mirror_margins": True}), (12.7, 12.7))
-    check("och en profil utan speglingsflagga rörs inte",
-          mirrored_margins({"margin_left_mm": 20.0, "margin_right_mm": 20.0}), (20.0, 20.0))
+    check("och en sida utan speglingsflagga rörs inte",
+          page_margins({"margin_left_mm": 20.0, "margin_right_mm": 20.0}, 3)[0::2], (20.0, 20.0))
     check("tomma värden faller tillbaka på 20 mm",
           mirrored_margins({}), (20.0, 20.0))
     return grönt
