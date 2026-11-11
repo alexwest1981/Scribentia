@@ -50,7 +50,13 @@ def main():
             print(f"Error loading {sys.argv[1]}: {e}")
 
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    # Qt's own teardown segfaulted here (SEGV in sip_api_get_address while the
+    # frame holding QApplication was cleared, core 11/11). Nothing waits on it:
+    # closeEvent has already saved. Leave the process past that teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
 
 if __name__ == "__main__":
     main()
